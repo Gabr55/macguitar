@@ -23,6 +23,11 @@ impl App {
             }
             Message::OpenFile(path) => self.open_file(path),
             Message::FileLoaded(result) => self.file_loaded(result),
+            Message::Zoom(direction) => self.zoom(direction),
+            Message::TouchDown(measure, beat) => self.touch_down(measure, beat),
+            Message::TouchScrolled => self.touch_scrolled(),
+            Message::TouchHeld(id) => self.touch_held(id),
+            Message::TouchEnded => self.touch_ended(),
 
             // playback
             Message::PlayPause => self.play_pause(),
@@ -80,6 +85,10 @@ impl App {
                 Task::none()
             }
             Message::WindowResized => self.measure_tablature(),
+            Message::WindowSized(size) => {
+                self.window_size = size;
+                self.measure_tablature()
+            }
             Message::TablatureResized(size) => {
                 if let Some(tablature) = &mut self.tablature {
                     tablature.update_container_size(size.width, size.height);

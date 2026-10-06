@@ -22,6 +22,7 @@ use iced::widget::{Id, Row, column, scrollable};
 use iced::{Element, Length};
 use layout::RowSpacing;
 use measure::CanvasMeasure;
+pub use measure::set_touch_looping;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -46,6 +47,10 @@ pub struct Tablature {
     /// Changing tracks keeps the measure and finds the beat of the new
     /// track sounding at that moment, whatever moved the highlight there.
     focus_tick: u32,
+    /// How large the measures are drawn, 1.0 as laid out.
+    zoom: f32,
+    /// Width the rows have, in pixels on screen.
+    available_width: f32,
 }
 
 impl Tablature {
@@ -76,6 +81,8 @@ impl Tablature {
             loop_range: None,
             focus_tick: song_start(&measure_per_tick),
             measure_per_tick,
+            zoom: 1.0,
+            available_width: 0.0,
         };
         tab.load_measures();
         tab
@@ -93,7 +100,7 @@ impl Tablature {
                 self.song.measure_headers[i].time_signature
                     != self.song.measure_headers[previous].time_signature
             });
-            let measure = CanvasMeasure::new(
+            let mut measure = CanvasMeasure::new(
                 i,
                 self.track_id,
                 self.song.clone(),
@@ -101,27 +108,42 @@ impl Tablature {
                 has_time_signature,
                 syllables.get(i).cloned().unwrap_or_default(),
             );
+            measure.zoom = self.zoom;
             self.canvas_measures.push(measure);
         }
         // a new track keeps the loop drawn
         self.set_loop(self.loop_range);
-        // recompute line tracker with existing width
-        let existing_width = self.line_tracker.tablature_container_width;
-        self.line_tracker = LineTracker::make(&self.canvas_measures, existing_width);
+        self.lay_out();
+    }
+
+    /// Break the measures into lines for the width at the zoom, and give
+    /// each line its rows.
+    fn lay_out(&mut self) {
+        // the measures are laid out in their own units, the zoom taken out
+        self.line_tracker =
+            LineTracker::make(&self.canvas_measures, self.available_width / self.zoom);
         self.update_first_on_line();
         self.update_line_spacing();
     }
 
+    /// Draw the measures larger or smaller: fewer or more fit a line.
+    pub fn set_zoom(&mut self, zoom: f32) {
+        if (self.zoom - zoom).abs() < f32::EPSILON {
+            return;
+        }
+        self.zoom = zoom;
+        for measure in &mut self.canvas_measures {
+            measure.zoom = zoom;
+            measure.canvas_cache.clear();
+        }
+        self.lay_out();
+    }
+
     pub fn update_container_size(&mut self, width: f32, height: f32) {
         self.viewport_height = height;
-        // recompute line tracker on width change
-        self.line_tracker = LineTracker::make(
-            &self.canvas_measures,
-            width - (INNER_PADDING * 2.0) - SCROLLBAR_WIDTH, // remove padding and scrollbar
-        );
-        // mark which measures start a new line and clear caches
-        self.update_first_on_line();
-        self.update_line_spacing();
+        // the padding and the scrollbar take their share
+        self.available_width = width - (INNER_PADDING * 2.0) - SCROLLBAR_WIDTH;
+        self.lay_out();
     }
 
     /// Give every measure of a line the same annotation rows, sized for the
@@ -144,7 +166,8 @@ impl Tablature {
         self.line_heights = vec![0.0; line_count];
         for cm in &self.canvas_measures {
             let line = self.line_tracker.get_line(cm.measure_id) as usize - 1;
-            self.line_heights[line] = self.line_heights[line].max(cm.vertical_measure_height);
+            self.line_heights[line] =
+                self.line_heights[line].max(cm.vertical_measure_height * self.zoom);
         }
     }
 
@@ -310,7 +333,7 @@ impl Tablature {
         let content: Element<Message> = if has_layout {
             // Build explicit rows using LineTracker line assignments.
             // Each measure uses FillPortion to stretch and fill the row width.
-            let row_width = self.line_tracker.tablature_container_width;
+            let row_width = self.line_tracker.tablature_container_width * self.zoom;
             let mut rows: Vec<Element<Message>> = Vec::new();
             let mut current_row: Vec<Element<Message>> = Vec::new();
             let mut current_line = 0_u32;

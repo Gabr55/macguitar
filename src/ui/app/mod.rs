@@ -51,6 +51,8 @@ pub struct App {
     /// Where the loop being drawn with the right button started, and
     /// whether the pointer has left that measure since.
     loop_anchor: Option<(usize, bool)>,
+    /// A finger on the tablature, until it is lifted.
+    touch: Option<TouchGesture>,
     is_loading: bool,
 
     // playback, kept from one song to the next
@@ -75,15 +77,75 @@ pub struct App {
     is_fullscreen: bool,
     /// The open menu, with the bounds of the button it hangs under.
     menu: Option<(Menu, Rectangle)>,
+    /// Size of the window, which a phone's screen makes compact.
+    window_size: Size,
+    /// How large the tablature is drawn, kept between songs and launches.
+    zoom: f32,
     error_message: Option<String>,
 }
 
+/// A finger down on a beat: a tap, a hold or a scroll, as it turns out.
+#[derive(Debug, Clone, Copy)]
+struct TouchGesture {
+    /// Tells this touch from the next, for the timer of the hold.
+    id: u64,
+    measure: usize,
+    beat: usize,
+    /// The finger moved away: it scrolls the sheet.
+    scrolled: bool,
+    /// The finger stayed down long enough: it draws a loop.
+    held: bool,
+}
+
+/// The sizes the tablature is drawn at, smallest to largest.
+const ZOOM_STEPS: [f32; 11] = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0];
+
+/// The step after `zoom` in `direction`, or the last one; a zoom between
+/// steps goes to the nearest one that way.
+fn zoom_step(zoom: f32, direction: i32) -> f32 {
+    if direction > 0 {
+        ZOOM_STEPS
+            .iter()
+            .copied()
+            .find(|step| *step > zoom + 0.01)
+            .unwrap_or(ZOOM_STEPS[ZOOM_STEPS.len() - 1])
+    } else {
+        ZOOM_STEPS
+            .iter()
+            .rev()
+            .copied()
+            .find(|step| *step < zoom - 0.01)
+            .unwrap_or(ZOOM_STEPS[0])
+    }
+}
+
+/// Size of the window when it opens on a desktop.
+const WINDOW_WIDTH: f32 = 1240.0;
+const WINDOW_HEIGHT: f32 = 820.0;
+
+/// Below this width or height the layout is compact: a phone's screen.
+const COMPACT_WIDTH: f32 = 760.0;
+const COMPACT_HEIGHT: f32 = 520.0;
+/// Below this width, a phone held upright, the transport takes two lines.
+const NARROW_WIDTH: f32 = 600.0;
+
 impl App {
+    /// A phone's screen: smaller margins, fewer and denser controls.
+    fn is_compact(&self) -> bool {
+        self.window_size.width < COMPACT_WIDTH || self.window_size.height < COMPACT_HEIGHT
+    }
+
+    /// A phone held upright.
+    fn is_narrow(&self) -> bool {
+        self.window_size.width < NARROW_WIDTH
+    }
+
     fn new(
         sound_font_file: Option<PathBuf>,
         config: Config,
         theme_choice: Option<ThemeChoice>,
     ) -> Self {
+        let zoom = config.zoom();
         Self {
             song_info: None,
             all_tracks: Vec::new(),
@@ -93,6 +155,7 @@ impl App {
             audio_player: None,
             loop_range: None,
             loop_anchor: None,
+            touch: None,
             is_loading: false,
             playback: PlaybackSettings::default(),
             sound_font_file,
@@ -105,6 +168,8 @@ impl App {
             theme: theme::build(theme::is_dark(theme_choice, Mode::None)),
             is_fullscreen: false,
             menu: None,
+            window_size: Size::new(WINDOW_WIDTH, WINDOW_HEIGHT),
+            zoom,
             error_message: None,
         }
     }
@@ -116,7 +181,11 @@ impl App {
                 .get_sound_font()
                 .filter(|path| path.exists())
         });
-        let app = Self::new(sound_font, args.local_config.clone(), args.theme);
+        let mut app = Self::new(sound_font, args.local_config.clone(), args.theme);
+        app.error_message = args
+            .crash_report
+            .as_ref()
+            .map(|report| format!("MacGuitar stopped unexpectedly the last time:\n{report}"));
 
         let open_task = args
             .tab_file_path
@@ -158,7 +227,7 @@ impl App {
 
 fn window_settings() -> window::Settings {
     window::Settings {
-        size: Size::new(1240.0, 820.0),
+        size: Size::new(WINDOW_WIDTH, WINDOW_HEIGHT),
         min_size: Some(Size::new(820.0, 520.0)),
         position: window::Position::Centered,
         icon: window_icon(),
@@ -181,4 +250,21 @@ fn window_icon() -> Option<window::Icon> {
     let info = reader.next_frame(&mut rgba).ok()?;
     rgba.truncate(info.buffer_size());
     window::icon::from_rgba(rgba, info.width, info.height).ok()
+}
+
+#[cfg(test)]
+mod zoom_tests {
+    use super::{ZOOM_STEPS, zoom_step};
+
+    #[test]
+    fn the_zoom_goes_by_steps_and_stops_at_the_ends() {
+        assert!((zoom_step(1.0, 1) - 1.15).abs() < f32::EPSILON);
+        assert!((zoom_step(1.0, -1) - 0.9).abs() < f32::EPSILON);
+        let last = ZOOM_STEPS[ZOOM_STEPS.len() - 1];
+        assert!((zoom_step(last, 1) - last).abs() < f32::EPSILON);
+        assert!((zoom_step(ZOOM_STEPS[0], -1) - ZOOM_STEPS[0]).abs() < f32::EPSILON);
+        // a zoom saved between steps goes to the nearest one that way
+        assert!((zoom_step(1.07, 1) - 1.15).abs() < f32::EPSILON);
+        assert!((zoom_step(1.07, -1) - 1.0).abs() < f32::EPSILON);
+    }
 }

@@ -1,19 +1,20 @@
 //! The tuning of the track, shown above the tablature.
 
 use iced::widget::{container, row, text};
-use iced::{Alignment, Element};
+use iced::{Alignment, Element, Length};
 
-use crate::ui::app::App;
 use crate::ui::app::format::format_semitones;
 use crate::ui::app::message::Message;
-use crate::ui::theme::{self};
+use crate::ui::app::{App, ZOOM_STEPS};
+use crate::ui::icons::Icon;
+use crate::ui::theme::{self, Tokens};
 use crate::ui::tuning::{string_notes, tuning_name};
-use crate::ui::widgets::{UI_FONT_BOLD, muted};
+use crate::ui::widgets::{UI_FONT_BOLD, icon_button, muted};
 
 impl App {
     /// The tuning of the selected track, above its tablature, as it sounds
     /// with the song retuned.
-    pub(super) fn tuning_line(&self) -> Option<Element<'_, Message>> {
+    pub(super) fn tuning_line(&self, tokens: Tokens) -> Option<Element<'_, Message>> {
         let track = &self.track_selection;
         if track.strings.is_empty() {
             return None;
@@ -50,6 +51,31 @@ impl App {
                 .size(12),
             );
         }
-        Some(container(line).padding([6, 10]).into())
+        // the size of the tablature, at the other end of the line
+        let zoom = row![
+            icon_button(
+                Icon::ZoomOut,
+                "Smaller (\u{2212})",
+                (self.zoom > ZOOM_STEPS[0]).then_some(Message::Zoom(-1)),
+                tokens
+            ),
+            container(
+                text(format!("{:.0}%", self.zoom * 100.0))
+                    .size(12)
+                    .font(UI_FONT_BOLD)
+            )
+            .width(42)
+            .align_x(Alignment::Center),
+            icon_button(
+                Icon::ZoomIn,
+                "Larger (+)",
+                (self.zoom < ZOOM_STEPS[ZOOM_STEPS.len() - 1]).then_some(Message::Zoom(1)),
+                tokens
+            ),
+        ]
+        .align_y(Alignment::Center);
+        let line =
+            row![container(line).width(Length::Fill).clip(true), zoom].align_y(Alignment::Center);
+        Some(container(line).padding([2, 10]).into())
     }
 }

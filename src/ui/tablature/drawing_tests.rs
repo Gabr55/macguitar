@@ -8,7 +8,7 @@ use super::layout::{
     MAX_BEAMS, MIN_BEAT_WIDTH, ROW_MARKER, RowSpacing, beat_natural_width, focus_box_top,
     label_extra_width, lyric_extra_width, spacing_for_quarter,
 };
-use super::measure::tempo_label;
+use super::measure::tempo_mark;
 use super::notes::{next_note_on_string, tied_from_note_x};
 use super::rhythm::{
     beam_leans_right, beam_runs, division_length, is_rest, stem_beams, tuplet_runs,
@@ -591,7 +591,10 @@ fn an_ending_bracket_spans_its_measures() {
 #[test]
 fn the_tempo_reads_as_written() {
     let mut tempo = Tempo::new(140, None);
-    assert_eq!(tempo_label(&tempo), "\u{2669} = 140");
+    assert_eq!(tempo_mark(&tempo), (TempoUnit::Quarter, 140));
     tempo.written = Some((280, TempoUnit::Eighth));
-    assert_eq!(tempo_label(&tempo), "\u{266A} = 280");
+    assert_eq!(tempo_mark(&tempo), (TempoUnit::Eighth, 280));
+    // a half note has no drawing of its own: in quarters then
+    tempo.written = Some((70, TempoUnit::Half));
+    assert_eq!(tempo_mark(&tempo), (TempoUnit::Quarter, 140));
 }

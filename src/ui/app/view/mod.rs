@@ -39,33 +39,35 @@ impl App {
         let tuning = self
             .tablature
             .as_ref()
-            .and_then(|_| self.tuning_line())
+            .and_then(|_| self.tuning_line(tokens))
             .unwrap_or_else(nothing);
         let sheet = container(column![
             tuning,
             container(sheet_content).id(self.tablature_id.clone())
         ])
-        .padding(6)
+        .padding(if self.is_compact() { 3 } else { 6 })
         .width(Length::Fill)
         .height(Length::Fill)
         .style(theme::panel);
 
+        // a phone's screen spares its room
+        let gap = if self.is_compact() { 4.0 } else { 10.0 };
         // fullscreen keeps only the sheet
         let (header, transport, top) = if self.is_fullscreen {
-            (nothing(), nothing(), 10.0)
+            (nothing(), nothing(), gap)
         } else {
             (
                 self.header(tokens),
                 self.transport(tokens).unwrap_or_else(nothing),
-                10.0 + TITLE_BAR_INSET,
+                gap + TITLE_BAR_INSET,
             )
         };
         let window = container(
             column![header, sheet, transport]
-                .spacing(if self.is_fullscreen { 0.0 } else { 10.0 })
+                .spacing(if self.is_fullscreen { 0.0 } else { gap })
                 .padding(iced::Padding {
                     top,
-                    ..iced::Padding::new(10.0)
+                    ..iced::Padding::new(gap)
                 }),
         )
         .width(Length::Fill)

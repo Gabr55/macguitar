@@ -1,13 +1,13 @@
 [package]
 name = "macguitar"
-version = "0.13.1"
+version = "0.14.0"
 edition = "2024"
 # based on ruxguitar by Arnaud Gourlay, https://github.com/agourlay/ruxguitar
 authors = [
     "Габриелян Александр",
     "Arnaud Gourlay <arnaud.gourlay@gmail.com>",
 ]
-description = "A Guitar Pro tablature player"
+description = "A Guitar Pro tablature player for macOS and Windows"
 repository = "https://github.com/Gabr55/macguitar"
 license = "Apache-2.0"
 readme = "README.md"
@@ -53,7 +53,7 @@ iced = { version = "0.14.0", features = [
     "selector",
     "svg",
 ] }
-tokio = { version = "1.53.1", features = ["fs", "sync"] }
+tokio = { version = "1.53.1", features = ["fs", "sync", "time"] }
 rfd = "0.17.2"
 log = "0.4.33"
 env_logger = "0.11.11"

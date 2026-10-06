@@ -84,6 +84,9 @@ impl App {
             scroll_id.clone(),
             &playback_order,
         ));
+        if let Some(tablature) = &mut self.tablature {
+            tablature.set_zoom(self.zoom);
+        }
         self.load_audio_player(song, &playback_order)
             .map_err(|err| format!("Could not start the audio: {err}"))?;
 

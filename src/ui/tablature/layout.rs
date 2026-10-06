@@ -8,10 +8,11 @@ use super::rhythm::stem_beams;
 use crate::parser::model::{
     Beat, BeatStrokeDirection, Duration, Measure, MeasureHeader, QUARTER_TIME,
 };
+use iced::Renderer;
+use iced::widget::canvas::Frame;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 // Unicode symbols for musical notation
-pub(super) const TEMPO_SIGN: char = '\u{2669}'; // ♩ quarter note, in the basic plane so most fonts carry it
-pub(super) const EIGHTH_SIGN: char = '\u{266A}'; // ♪ eighth note, from the same block
 
 // Drawing constants
 
@@ -501,4 +502,27 @@ impl Staff {
     pub(super) const fn bottom(self) -> f32 {
         self.top + self.height
     }
+}
+
+/// The zoom the measure being painted is drawn at, as the bits of an f32.
+static PAINT_ZOOM: AtomicU32 = AtomicU32::new(0x3f80_0000); // 1.0
+
+/// Paint at `zoom`: the frame is scaled, and [`logical_width`] takes the
+/// zoom out of its width.
+pub(super) fn paint_at_zoom(
+    frame: &mut Frame<Renderer>,
+    zoom: f32,
+    paint: impl FnOnce(&mut Frame<Renderer>),
+) {
+    PAINT_ZOOM.store(zoom.to_bits(), Ordering::Relaxed);
+    frame.with_save(|frame| {
+        frame.scale(zoom);
+        paint(frame);
+    });
+    PAINT_ZOOM.store(1.0_f32.to_bits(), Ordering::Relaxed);
+}
+
+/// The width of `frame` in the units the measure is laid out in.
+pub(super) fn logical_width(frame: &Frame<Renderer>) -> f32 {
+    frame.width() / f32::from_bits(PAINT_ZOOM.load(Ordering::Relaxed))
 }

@@ -149,6 +149,7 @@ impl Menu {
 pub enum Message {
     // files
     OpenFileDialog,
+    /// The file dialog closed, on a tablature or none.
     TablaturePicked(Option<PathBuf>),
     OpenFile(PathBuf),
     FileLoaded(Result<LoadedFile, FileError>),
@@ -186,12 +187,22 @@ pub enum Message {
     ToggleCountIn,
     /// Retune the whole song by this many semitones from where it is.
     Transpose(i32),
+    /// Draw the tablature a step larger (1) or smaller (-1).
+    Zoom(i32),
     /// The right button went down on a measure: a loop starts there.
     LoopFrom(usize),
     /// The pointer entered a measure: a loop being drawn grows to it.
     LoopOver(usize),
     /// The right button was let go: the loop is drawn.
     LoopDrawn,
+    /// A finger touched a beat of a measure.
+    TouchDown(usize, usize),
+    /// The finger moved away from where it touched: it scrolls.
+    TouchScrolled,
+    /// The finger of this touch stayed down: it holds.
+    TouchHeld(u64),
+    /// The finger was lifted.
+    TouchEnded,
     ToggleLoop,
 
     // window
@@ -199,6 +210,9 @@ pub enum Message {
     MenuAnchored(Menu, iced::Rectangle),
     CloseMenu,
     WindowResized,
+    /// The window opened or changed size: the layout follows, compact on a
+    /// phone.
+    WindowSized(iced::Size),
     TablatureResized(Size),
     /// Toggle fullscreen, which shows the tablature alone.
     ToggleFullscreen,

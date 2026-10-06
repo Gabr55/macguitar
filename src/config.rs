@@ -22,6 +22,9 @@ pub struct Config {
     /// Tablatures opened lately, the last one first.
     #[serde(default)]
     recent_files: Vec<PathBuf>,
+    /// How large the tablature is drawn, 1.0 as laid out.
+    #[serde(default)]
+    zoom: Option<f32>,
 }
 
 /// How many recent files are remembered.
@@ -93,6 +96,22 @@ impl Config {
 
     pub fn get_sound_font(&self) -> Option<PathBuf> {
         self.sound_font.clone()
+    }
+
+    /// How large the tablature is drawn, 1.0 unless changed.
+    pub fn zoom(&self) -> f32 {
+        self.zoom
+            .filter(|zoom| zoom.is_finite() && *zoom > 0.0)
+            .unwrap_or(1.0)
+    }
+
+    pub fn set_zoom(&mut self, zoom: f32) -> Result<(), AppError> {
+        if self.zoom == Some(zoom) {
+            Ok(())
+        } else {
+            self.zoom = Some(zoom);
+            self.save_config()
+        }
     }
 
     pub fn set_sound_font(&mut self, sound_font: Option<PathBuf>) -> Result<(), AppError> {

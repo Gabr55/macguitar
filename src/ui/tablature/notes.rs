@@ -8,7 +8,7 @@ use super::effects::{
 };
 use super::layout::{
     CHORD_DIAGRAM_HEIGHT, GRACE_DIGIT_WIDTH, GRACE_GAP, NOTE_DIGIT_WIDTH, ROW_EFFECT_LINE,
-    RowSpacing, STRING_LINE_HEIGHT,
+    RowSpacing, STRING_LINE_HEIGHT, logical_width,
 };
 use super::rhythm::{draw_rest, is_rest};
 use crate::parser::model::{
@@ -341,7 +341,7 @@ pub(super) fn draw_note(
                 .or_else(|| {
                     next_measure
                         .and_then(|next| first_fret_on_string(next, note.string))
-                        .map(|value| (frame.width() + NOTE_DIGIT_WIDTH, value, true))
+                        .map(|value| (logical_width(frame) + NOTE_DIGIT_WIDTH, value, true))
                 });
             draw_slide(
                 frame,

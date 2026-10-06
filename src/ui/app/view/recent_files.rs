@@ -3,7 +3,7 @@
 
 use iced::advanced::text::Shaping;
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, container, text};
+use iced::widget::{button, column, container, scrollable, text};
 use iced::{Element, Length};
 use std::path::Path;
 
@@ -15,19 +15,29 @@ use crate::ui::widgets::{UI_FONT_BOLD, muted};
 /// Width of the recent files menu.
 pub(super) const RECENT_MENU_WIDTH: f32 = 380.0;
 
+/// Width of the recent files card of the welcome screen.
+const RECENT_CARD_WIDTH: f32 = 380.0;
+
 impl App {
-    /// The first `count` recent files, each opening on a click.
-    pub(super) fn recent_file_list(&self, count: usize) -> Element<'_, Message> {
-        let entries = self
-            .recent_files
-            .iter()
-            .take(count)
-            .map(|path| recent_entry(path));
+    /// The recent files as a card of `max_height` at most: those that do
+    /// not fit scroll inside it, each opening on a click.
+    pub(super) fn recent_file_list(&self, max_height: f32) -> Element<'_, Message> {
+        let entries = column(self.recent_files.iter().map(|path| recent_entry(path))).spacing(2);
         // the heading lines up with the names, inside the entries' padding
-        column![container(muted("Recent").size(12)).padding([0, 10])]
-            .extend(entries)
-            .spacing(2)
-            .width(360)
+        let card = column![
+            container(muted("Recent").size(12)).padding([4, 10]),
+            scrollable(entries)
+                .height(Length::Shrink)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new().width(4).scroller_width(4),
+                )),
+        ]
+        .spacing(2);
+        container(card)
+            .padding(6)
+            .width(RECENT_CARD_WIDTH)
+            .max_height(max_height)
+            .style(theme::menu_panel)
             .into()
     }
 

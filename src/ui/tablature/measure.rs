@@ -11,9 +11,9 @@ use super::effects::{
 };
 use super::highlight::{draw_cursor, draw_focused_box, draw_loop_band};
 use super::layout::{
-    BEAT_LENGTH, EIGHTH_SIGN, HALF_BEAT_LENGTH, MEASURE_NOTES_PADDING, MIN_BEAT_WIDTH,
-    MIN_MEASURE_WIDTH, RowSpacing, STRING_LINE_HEIGHT, Staff, TEMPO_SIGN, beat_base_width,
-    beat_natural_width, grace_gap_width, lyric_extra_width, measure_height, spacing_for_quarter,
+    BEAT_LENGTH, HALF_BEAT_LENGTH, MEASURE_NOTES_PADDING, MIN_BEAT_WIDTH, MIN_MEASURE_WIDTH,
+    RowSpacing, STRING_LINE_HEIGHT, Staff, beat_base_width, beat_natural_width, grace_gap_width,
+    logical_width, lyric_extra_width, measure_height, paint_at_zoom, spacing_for_quarter,
 };
 use super::notes::draw_beat;
 use super::rhythm::{draw_rhythm, draw_tuplet_bracket, tuplet_runs};
@@ -23,7 +23,9 @@ use crate::ui::widgets::UI_FONT;
 use iced::advanced::mouse;
 use iced::advanced::text::Shaping::Auto;
 use iced::mouse::Cursor;
+use iced::touch;
 use iced::widget::canvas::{Cache, Event, Geometry, Path, Stroke, Text};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 type Frame = iced::widget::canvas::Frame<Renderer>;
 use iced::widget::text::Alignment;
@@ -61,6 +63,8 @@ pub struct CanvasMeasure {
     pub(super) has_triplet_feel: bool,
     /// One syllable per beat, empty where the beat carries none.
     pub(super) lyrics: Vec<String>,
+    /// How large the measure is drawn, 1.0 as laid out.
+    pub(super) zoom: f32,
 }
 
 impl CanvasMeasure {
@@ -156,6 +160,7 @@ impl CanvasMeasure {
             has_key_signature,
             has_triplet_feel,
             lyrics,
+            zoom: 1.0,
         }
     }
 
@@ -180,8 +185,8 @@ impl CanvasMeasure {
 
     pub fn view(&self) -> Element<'_, Message> {
         Canvas::new(self)
-            .height(self.vertical_measure_height)
-            .width(Length::Fixed(self.total_measure_len))
+            .height(self.vertical_measure_height * self.zoom)
+            .width(Length::Fixed(self.total_measure_len * self.zoom))
             .into()
     }
 
@@ -189,7 +194,7 @@ impl CanvasMeasure {
     pub fn view_fill(&self) -> Element<'_, Message> {
         let portion = (self.total_measure_len.round() as u16).max(1);
         Canvas::new(self)
-            .height(self.vertical_measure_height)
+            .height(self.vertical_measure_height * self.zoom)
             .width(Length::FillPortion(portion))
             .into()
     }
@@ -267,6 +272,20 @@ pub struct MeasureInteraction {
     /// The pointer is over the measure: entering it is reported once, so a
     /// loop being drawn with the right button can grow over it.
     pub(super) hovered: bool,
+    /// Where a finger touched the measure, until it moves away: a tap or a
+    /// hold, rather than a scroll.
+    pub(super) touched_at: Option<Point>,
+}
+
+/// How far a finger moves before a touch is a scroll, in logical pixels.
+const TOUCH_SLOP: f32 = 10.0;
+
+/// A loop is being drawn with a finger: its moves draw, they do not scroll.
+static TOUCH_LOOPING: AtomicBool = AtomicBool::new(false);
+
+/// Start or stop drawing a loop with a finger.
+pub fn set_touch_looping(looping: bool) {
+    TOUCH_LOOPING.store(looping, Ordering::Relaxed);
 }
 
 impl canvas::Program<Message> for CanvasMeasure {
@@ -279,14 +298,17 @@ impl canvas::Program<Message> for CanvasMeasure {
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Option<Action<Message>> {
-        let Event::Mouse(mouse_event) = event else {
-            return None;
+        let mouse_event = match event {
+            Event::Mouse(mouse_event) => mouse_event,
+            Event::Touch(touch_event) => return self.on_touch(state, touch_event, bounds, cursor),
+            _ => return None,
         };
         match mouse_event {
             // the left button places the playhead on a beat
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 let cursor_position = cursor.position_in(bounds)?;
-                let beat_id = self.beat_at_x(cursor_position.x, bounds.width);
+                let beat_id =
+                    self.beat_at_x(cursor_position.x / self.zoom, bounds.width / self.zoom);
                 log::debug!("Clicked on measure {} beat {beat_id}", self.measure_id);
                 Some(Action::publish(Message::FocusMeasure(
                     self.measure_id,
@@ -328,7 +350,7 @@ impl canvas::Program<Message> for CanvasMeasure {
         // the cache redraws only when cleared or resized
         let tab = self.canvas_cache.draw(renderer, bounds.size(), |frame| {
             log::debug!("Re-drawing measure {}", self.measure_id);
-            self.paint(frame, colors);
+            paint_at_zoom(frame, self.zoom, |frame| self.paint(frame, colors));
         });
 
         vec![tab]
@@ -336,12 +358,63 @@ impl canvas::Program<Message> for CanvasMeasure {
 }
 
 impl CanvasMeasure {
+    /// A finger on the tablature, as on a phone: a tap places the playhead
+    /// (in the app, once let go without moving), a hold loops the measure
+    /// and a hold then a drag loops the measures it goes over; a finger
+    /// moving at once scrolls.
+    fn on_touch(
+        &self,
+        state: &mut MeasureInteraction,
+        event: &touch::Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<Message>> {
+        match event {
+            touch::Event::FingerPressed { position, .. } => {
+                let at = cursor.position_in(bounds)?;
+                state.touched_at = Some(*position);
+                state.hovered = true;
+                let beat = self.beat_at_x(at.x / self.zoom, bounds.width / self.zoom);
+                Some(Action::publish(Message::TouchDown(self.measure_id, beat)))
+            }
+            touch::Event::FingerMoved { position, .. } => {
+                if TOUCH_LOOPING.load(Ordering::Relaxed) {
+                    // the loop grows over the measures the finger enters,
+                    // and the sheet stays still under it
+                    let hovered = cursor.is_over(bounds);
+                    let entered = hovered && !state.hovered;
+                    state.hovered = hovered;
+                    if !hovered {
+                        return None;
+                    }
+                    let action = if entered {
+                        Action::publish(Message::LoopOver(self.measure_id))
+                    } else {
+                        Action::request_redraw()
+                    };
+                    return Some(action.and_capture());
+                }
+                let origin = state.touched_at?;
+                if origin.distance(*position) <= TOUCH_SLOP {
+                    return None;
+                }
+                state.touched_at = None;
+                Some(Action::publish(Message::TouchScrolled))
+            }
+            touch::Event::FingerLifted { .. } | touch::Event::FingerLost { .. } => {
+                state.touched_at = None;
+                state.hovered = false;
+                None
+            }
+        }
+    }
+
     /// Draw the measure, back to front.
     fn paint(&self, frame: &mut Frame, colors: TablatureColors) {
         let track = &self.song.tracks[self.track_id];
         let header = &self.song.measure_headers[self.measure_id];
         let staff = Staff {
-            width: frame.width(),
+            width: logical_width(frame),
             top: self.row_spacing.first_string_y(),
             height: STRING_LINE_HEIGHT * (track.strings.len() - 1) as f32,
             rows: self.row_spacing,
@@ -462,13 +535,17 @@ impl CanvasMeasure {
         // the marker follows the tempo on the same row
         let mut marker_x = MEASURE_NOTES_PADDING;
         if self.has_tempo_label {
-            let tempo = tempo_label(&header.tempo);
-            marker_x += (tempo.chars().count() * 10) as f32;
+            // the note is drawn rather than written: not every font has it
+            let (unit, count) = tempo_mark(&header.tempo);
+            let y = staff.rows.marker_y();
+            let note_width = draw_tempo_note(frame, colors, unit, Point::new(1.0, y));
+            let value = format!("= {count}");
+            marker_x += note_width + (value.chars().count() * 7) as f32 + 14.0;
             frame.fill_text(label(
-                tempo,
+                value,
                 colors.foreground,
                 11.0,
-                Point::new(0.0, staff.rows.marker_y()),
+                Point::new(note_width + 4.0, y),
             ));
         }
         if let Some(marker) = &header.marker {
@@ -499,7 +576,7 @@ impl CanvasMeasure {
                     jumps.join("  "),
                     colors.foreground,
                     10.0,
-                    Point::new(frame.width() - 4.0, staff.rows.marker_y()),
+                    Point::new(logical_width(frame) - 4.0, staff.rows.marker_y()),
                 )
             });
         }
@@ -704,12 +781,55 @@ impl CanvasMeasure {
     }
 }
 
-/// The tempo as the score writes it: "♪ = 280" for a tempo counted in
-/// eighths, in quarters otherwise.
-pub(super) fn tempo_label(tempo: &Tempo) -> String {
+/// The tempo as the score writes it, its note and count: 280 eighths, or
+/// in quarters when written in a note drawn here as no other.
+pub(super) fn tempo_mark(tempo: &Tempo) -> (TempoUnit, u32) {
     match tempo.written {
-        Some((count, TempoUnit::Eighth)) => format!("{EIGHTH_SIGN} = {count}"),
-        Some((count, TempoUnit::DottedQuarter)) => format!("{TEMPO_SIGN}. = {count}"),
-        _ => format!("{TEMPO_SIGN} = {}", tempo.value),
+        Some((count, unit @ (TempoUnit::Eighth | TempoUnit::DottedQuarter))) => (unit, count),
+        _ => (TempoUnit::Quarter, tempo.value),
     }
+}
+
+/// The note a tempo counts, its top-left at `at` in a line of 11 pixel
+/// text: a head, a stem, a flag for an eighth and a dot when dotted.
+/// Returns the width it takes.
+fn draw_tempo_note(frame: &mut Frame, colors: TablatureColors, unit: TempoUnit, at: Point) -> f32 {
+    let head = Point::new(at.x + 3.0, at.y + 11.0);
+    let stem_x = head.x + 2.6;
+    let stem_top = at.y + 1.5;
+    frame.fill(&Path::circle(head, 2.8), colors.foreground);
+    let stroke = Stroke::default()
+        .with_width(1.1)
+        .with_color(colors.foreground);
+    frame.stroke(
+        &Path::line(
+            Point::new(stem_x, head.y - 0.5),
+            Point::new(stem_x, stem_top),
+        ),
+        stroke,
+    );
+    let mut width = stem_x - at.x + 1.0;
+    match unit {
+        TempoUnit::Eighth => {
+            let flag = Path::new(|path| {
+                path.move_to(Point::new(stem_x, stem_top));
+                path.bezier_curve_to(
+                    Point::new(stem_x + 1.0, stem_top + 3.0),
+                    Point::new(stem_x + 5.0, stem_top + 3.5),
+                    Point::new(stem_x + 3.5, stem_top + 8.0),
+                );
+            });
+            frame.stroke(&flag, stroke.with_width(1.3));
+            width += 4.5;
+        }
+        TempoUnit::DottedQuarter => {
+            frame.fill(
+                &Path::circle(Point::new(stem_x + 3.0, head.y), 1.0),
+                colors.foreground,
+            );
+            width += 4.0;
+        }
+        _ => {}
+    }
+    width
 }

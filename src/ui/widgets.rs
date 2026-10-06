@@ -5,7 +5,7 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::theme::{self, Tokens};
 use iced::font::Weight;
 use iced::widget::{
-    Space, button, center, column, container, mouse_area, opaque, row, text, tooltip,
+    Space, button, center, column, container, mouse_area, opaque, row, scrollable, text, tooltip,
 };
 use iced::{Alignment, Element, Font, Length, Theme};
 
@@ -107,6 +107,17 @@ pub fn open_button<'a>(label: &'a str, enabled: bool, tokens: Tokens) -> Element
     open_button_sized(label, enabled, tokens, 14.0, [8, 14])
 }
 
+/// The accent "open a file" button as its icon alone, for a phone.
+pub fn open_icon_button<'a>(enabled: bool, tokens: Tokens) -> Element<'a, Message> {
+    button(center(icon(Icon::Open, 18.0, tokens.on_accent)))
+        .width(36)
+        .height(34)
+        .padding(0)
+        .style(theme::primary_button)
+        .on_press_maybe(enabled.then_some(Message::OpenFileDialog))
+        .into()
+}
+
 fn open_button_sized<'a>(
     label: &'a str,
     enabled: bool,
@@ -144,7 +155,8 @@ pub fn error_dialog<'a>(message: &'a str, tokens: Tokens) -> Element<'a, Message
     container(
         column![
             title,
-            muted(message).size(14),
+            // a long report scrolls, the button stays in reach
+            container(scrollable(muted(message).size(14)).height(Length::Shrink)).max_height(360),
             row![Space::new().width(Length::Fill), dismiss]
         ]
         .spacing(16),

@@ -75,6 +75,8 @@ impl App {
                 keyboard::Key::Character(c) if c.eq_ignore_ascii_case("l") => {
                     Some(Message::ToggleLoop)
                 }
+                keyboard::Key::Character(c) if c == "+" || c == "=" => Some(Message::Zoom(1)),
+                keyboard::Key::Character(c) if c == "-" || c == "_" => Some(Message::Zoom(-1)),
                 _ => None,
             }
         });
@@ -88,26 +90,27 @@ impl App {
 
         subscriptions.push(system::theme_changes().map(Message::SystemThemeChanged));
 
-        // the right button ends a loop being drawn wherever it is let go
-        subscriptions.push(iced::event::listen_with(|event, _status, _window| {
-            matches!(
-                event,
+        // the right button ends a loop being drawn wherever it is let go,
+        // and a finger ends its touch wherever it is lifted
+        subscriptions.push(iced::event::listen_with(
+            |event, _status, _window| match event {
                 iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
-                    iced::mouse::Button::Right
-                ))
-            )
-            .then_some(Message::LoopDrawn)
-        }));
+                    iced::mouse::Button::Right,
+                )) => Some(Message::LoopDrawn),
+                iced::Event::Touch(
+                    iced::touch::Event::FingerLifted { .. } | iced::touch::Event::FingerLost { .. },
+                ) => Some(Message::TouchEnded),
+                _ => None,
+            },
+        ));
 
-        let window_resized = window::resize_events().map(|_| Message::WindowResized);
+        let window_resized = window::resize_events().map(|(_, size)| Message::WindowSized(size));
         subscriptions.push(window_resized);
 
-        let file_dropped = window::events().filter_map(|(_, event)| {
-            if let window::Event::FileDropped(path) = event {
-                Some(Message::OpenFile(path))
-            } else {
-                None
-            }
+        let file_dropped = window::events().filter_map(|(_, event)| match event {
+            window::Event::FileDropped(path) => Some(Message::OpenFile(path)),
+            window::Event::Opened { size, .. } => Some(Message::WindowSized(size)),
+            _ => None,
         });
         subscriptions.push(file_dropped);
 

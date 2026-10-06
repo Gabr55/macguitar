@@ -1,6 +1,7 @@
 //! The transport: playback, position, tempo, tuning and practice aids.
 
 use iced::widget::space::Space;
+use iced::widget::text::Wrapping;
 use iced::widget::{column, container, pick_list, progress_bar, row, slider, text, tooltip};
 use iced::{Alignment, Element, Length};
 
@@ -52,18 +53,26 @@ impl App {
         .spacing(4)
         .align_y(Alignment::Center);
 
+        // on one line however narrow: the measure left, the time right
         let position = column![
             row![
                 text(format!("Measure {}", focused + 1))
                     .size(12)
-                    .font(UI_FONT_BOLD),
-                muted(format!(" / {total_measures}")).size(12),
-                Space::new().width(Length::Fill),
+                    .font(UI_FONT_BOLD)
+                    .wrapping(Wrapping::None),
+                muted(format!(" / {total_measures}"))
+                    .size(12)
+                    .wrapping(Wrapping::None),
+                Space::new().width(Length::Fill).height(1),
                 text(format_mmss(current_seconds))
                     .size(12)
-                    .font(UI_FONT_BOLD),
-                muted(format!(" / {}", format_mmss(total_seconds))).size(12),
-            ],
+                    .font(UI_FONT_BOLD)
+                    .wrapping(Wrapping::None),
+                muted(format!(" / {}", format_mmss(total_seconds)))
+                    .size(12)
+                    .wrapping(Wrapping::None),
+            ]
+            .spacing(0),
             progress_bar(0.0..=total_seconds.max(f32::EPSILON), current_seconds)
                 .girth(4)
                 .style(theme::progress),
@@ -71,12 +80,17 @@ impl App {
         .spacing(7)
         .width(Length::Fill);
 
+        let compact = self.is_compact();
         let tempo = row![
-            with_tooltip(
-                icon(Icon::Tempo, 17.0, tokens.muted),
-                "Tempo (Ctrl \u{2191}/\u{2193})",
-                tooltip::Position::Top,
-            ),
+            if compact {
+                Element::from(Space::new())
+            } else {
+                with_tooltip(
+                    icon(Icon::Tempo, 17.0, tokens.muted),
+                    "Tempo (Ctrl \u{2191}/\u{2193})",
+                    tooltip::Position::Top,
+                )
+            },
             pick_list(
                 TempoSelection::PRESET,
                 Some(&self.playback.tempo),
@@ -152,23 +166,52 @@ impl App {
         .spacing(8)
         .align_y(Alignment::Center);
 
-        let transport = row![
-            buttons,
-            divider(),
-            position,
-            divider(),
-            tempo,
-            transpose,
-            practice,
-            divider(),
-            volume,
-        ]
-        .spacing(14)
-        .align_y(Alignment::Center);
+        // a phone has its volume keys, and the sound comes down here from
+        // the header; upright, the controls take three lines
+        let transport: Element<'_, Message> = if !compact {
+            row![
+                buttons,
+                divider(),
+                position,
+                divider(),
+                tempo,
+                transpose,
+                practice,
+                divider(),
+                volume,
+            ]
+            .spacing(14)
+            .align_y(Alignment::Center)
+            .into()
+        } else if self.is_narrow() {
+            column![
+                row![position, transpose]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+                row![buttons, Space::new().width(Length::Fill), tempo, practice]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                self.sound_picker(tokens),
+            ]
+            .spacing(8)
+            .into()
+        } else {
+            row![
+                buttons,
+                position,
+                tempo,
+                transpose,
+                practice,
+                self.sound_picker(tokens)
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center)
+            .into()
+        };
 
         Some(
             container(transport)
-                .padding([10, 16])
+                .padding(if compact { [6, 10] } else { [10, 16] })
                 .style(theme::panel)
                 .into(),
         )

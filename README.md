@@ -2,7 +2,7 @@
 
 [![Build status](https://github.com/Gabr55/macguitar/actions/workflows/ci.yml/badge.svg)](https://github.com/Gabr55/macguitar/actions/workflows/ci.yml)
 
-A Guitar Pro tablature player for macOS.
+A Guitar Pro tablature player for macOS and Windows.
 
 Based on [ruxguitar](https://github.com/agourlay/ruxguitar) by Arnaud Gourlay, under the Apache License 2.0. Its original design is described in the article "[Playing guitar tablatures in Rust](https://agourlay.github.io/ruxguitar-tablature-player/)".
 
@@ -19,6 +19,7 @@ Based on [ruxguitar](https://github.com/agourlay/ruxguitar) by Arnaud Gourlay, u
     - tempo from 25% to 200%
     - retune the whole song by semitones (an octave either way) to play along in another tuning with the same frets
     - metronome and count-in
+- Zoom from 50% to 200% (`−` / `+` above the tablature), remembered
 - Recent files, on the welcome screen and in the header
 - Light and dark themes following the system
 - Keyboard shortcuts:
@@ -27,9 +28,11 @@ Based on [ruxguitar](https://github.com/agourlay/ruxguitar) by Arnaud Gourlay, u
     - `Ctrl+Up` / `Ctrl+Down` tempo up/down
     - `L` toggle the loop
     - `S` / `M` solo / mute the track
+    - `+` / `-` zoom in/out
     - `Ctrl+Cmd+F` (or `F11`) fullscreen, `Esc` to leave it
 - A left click places the playhead on a beat
 - Files open from the dialog, the recent files, or by drag and drop
+- On a touch screen: a tap places the playhead, a finger moving scrolls, a hold loops the measure, a hold then a drag loops the measures it goes over, a hold on a loop clears it
 
 It is a player: no editing, and tablature only, no standard notation.
 
@@ -48,6 +51,10 @@ The app is signed ad hoc, not notarized by Apple.
 ### Windows (64-bit)
 
 Download `MacGuitar-<version>-windows-x64.zip` from the [releases](https://github.com/Gabr55/macguitar/releases), unzip it and run `MacGuitar.exe` (Windows 10 or later). The exe is not signed: SmartScreen asks to confirm the first launch ("More info", then "Run anyway").
+
+### Android
+
+An Android version for phones is made in [macguitar-android](https://github.com/Gabr55/macguitar-android).
 
 ### Other systems, from source
 
@@ -112,13 +119,14 @@ The tests read small feature files in `test-files/`, from [alphaTab](https://git
 
 ```
 src/
-├── main.rs, cli.rs, error.rs, config.rs   start-up, arguments, errors, saved settings
+├── main.rs, lib.rs                the desktop binary, and the library it runs
+├── cli.rs, error.rs, config.rs    arguments, errors, saved settings
 ├── parser/        Guitar Pro files → model::Song
 │   ├── gp345/     GP3, GP4, GP5 (binary, read with nom)
 │   └── gp67/      GP6 .gpx and GP7 .gp (container → GPIF XML → song)
 ├── audio/         Song → MIDI events → SoundFont synthesizer on the audio thread
 │   ├── midi_builder/        events of every note and effect
-│   ├── playback_order.rs    repeats and alternative endings unrolled
+│   ├── playback_order.rs    repeats, alternative endings and jumps unrolled
 │   ├── midi_sequencer.rs    events delivered as time passes
 │   └── midi_player*.rs      the player, and its lock-free settings
 └── ui/            iced interface
