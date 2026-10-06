@@ -1,0 +1,53 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "f5anything",
+      "request": "launch",
+      "name": "Build MacGuitar macOS app (Apple Silicon)",
+      "command": "\"${workspaceFolder}/scripts/bundle-macos.sh\"",
+      "terminalName": "MacGuitar release build"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug MacGuitar",
+      "cargo": {
+        "args": ["build", "--bin=macguitar", "--package=macguitar"],
+        "filter": { "name": "macguitar", "kind": "bin" }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": { "RUST_LOG": "macguitar=debug" }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug MacGuitar with a tab",
+      "cargo": {
+        "args": ["build", "--bin=macguitar", "--package=macguitar"],
+        "filter": { "name": "macguitar", "kind": "bin" }
+      },
+      "args": ["--tab-file-path", "${input:tabFile}"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests",
+      "cargo": {
+        "args": ["test", "--no-run", "--bin=macguitar", "--package=macguitar"],
+        "filter": { "name": "macguitar", "kind": "bin" }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "tabFile",
+      "type": "promptString",
+      "description": "Path to a Guitar Pro file (.gp, .gpx, .gp5, .gp4, .gp3)"
+    }
+  ]
+}

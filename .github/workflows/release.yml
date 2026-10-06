@@ -1,0 +1,66 @@
+name: release
+
+# Builds MacGuitar.app for Apple Silicon, the same way scripts/bundle-macos.sh
+# does locally, and MacGuitar.exe for 64-bit Windows, and attaches their zips
+# to the release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  macos-app:
+    name: MacGuitar.app (Apple Silicon)
+    runs-on: macos-latest
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Build the app
+        run: scripts/bundle-macos.sh
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" target/macos-arm64/MacGuitar-*-macos-arm64.zip --clobber
+
+  windows-exe:
+    name: MacGuitar.exe (Windows x64)
+    runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Build the exe
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+      - name: Zip it with the licence
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          $name = "MacGuitar-$version-windows-x64"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/macguitar.exe "$name/MacGuitar.exe"
+          Copy-Item LICENSE "$name/LICENSE"
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh release upload "$TAG" MacGuitar-*-windows-x64.zip --clobber

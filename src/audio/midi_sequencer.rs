@@ -1,0 +1,404 @@
+//! Steps through the MIDI events of a song as playback time passes.
+
+use crate::audio::midi_event::{MidiEvent, MidiEventType};
+use crate::parser::model::QUARTER_TIME;
+
+pub struct MidiSequencer {
+    last_tick: u32,
+    /// Exact tick position; the current tick is its integer part.
+    tick_position: f64,
+    /// True until the first advance after a reset or a seek.
+    needs_init: bool,
+    sorted_events: Vec<MidiEvent>,
+}
+
+impl MidiSequencer {
+    pub fn new(sorted_events: Vec<MidiEvent>) -> Self {
+        assert!(
+            sorted_events
+                .as_slice()
+                .windows(2)
+                .all(|w| w[0].tick <= w[1].tick)
+        );
+        Self {
+            last_tick: 0,
+            tick_position: 0.0,
+            needs_init: true,
+            sorted_events,
+        }
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn events(&self) -> &[MidiEvent] {
+        &self.sorted_events
+    }
+
+    pub fn set_tick(&mut self, tick: u32) {
+        // set last_tick before the target so get_next_events includes events at target tick
+        // mark for init so the next advance() bumps by 1 instead of using a stale clock
+        let adjusted = tick.saturating_sub(1);
+        self.last_tick = adjusted;
+        self.tick_position = f64::from(adjusted);
+        self.needs_init = true;
+    }
+
+    pub fn reset_ticks(&mut self) {
+        self.set_tick(0);
+    }
+
+    pub const fn get_tick(&self) -> u32 {
+        self.tick_position as u32
+    }
+
+    pub const fn get_last_tick(&self) -> u32 {
+        self.last_tick
+    }
+
+    pub fn get_next_events(&self) -> Option<&[MidiEvent]> {
+        let current_tick = self.get_tick();
+        // do not return events if tick did not change
+        if self.last_tick == current_tick {
+            return Some(&[]);
+        }
+
+        // the position was pulled back (a loop set behind it): nothing new
+        if current_tick < self.last_tick {
+            return Some(&[]);
+        }
+
+        // all events with tick in (last_tick, current_tick]
+        // TODO could be improved by saving `end_index` to the next `start_index`
+        let start_index = self
+            .sorted_events
+            .partition_point(|event| event.tick <= self.last_tick);
+        // exit if end reached
+        if start_index == self.sorted_events.len() {
+            return None;
+        }
+        let len =
+            self.sorted_events[start_index..].partition_point(|event| event.tick <= current_tick);
+        Some(&self.sorted_events[start_index..start_index + len])
+    }
+
+    /// The tempo in force at `tick`: the last tempo change at or before it.
+    pub fn tempo_at(&self, tick: u32) -> Option<u32> {
+        let end = self
+            .sorted_events
+            .partition_point(|event| event.tick <= tick);
+        self.sorted_events[..end]
+            .iter()
+            .rev()
+            .find_map(|event| match event.event {
+                MidiEventType::TempoChange(tempo) => Some(tempo),
+                _ => None,
+            })
+    }
+
+    /// Advance by the audio time about to be rendered, keeping event
+    /// scheduling sample-locked to the output instead of a wall clock.
+    pub fn advance(&mut self, tempo: u32, elapsed_secs: f64) {
+        // init sequencer if first advance after a reset or seek
+        if self.needs_init {
+            self.needs_init = false;
+            // tick_position is integral here (set from a u32), so the bump is exact
+            self.tick_position += 1.0;
+            return;
+        }
+        // cap the elapsed time so an oversized buffer request cannot
+        // teleport playback far ahead; audio callbacks render ~0.1s
+        const MAX_ELAPSED_SECS: f64 = 0.5;
+        let elapsed_secs = elapsed_secs.min(MAX_ELAPSED_SECS);
+        self.last_tick = self.get_tick();
+        self.tick_position += tick_increase(tempo, elapsed_secs);
+    }
+
+    /// Hold the position short of `end`, so the events from `end` on are
+    /// not played: a loop turns back there.
+    pub fn hold_before(&mut self, end: u32) {
+        let limit = end.saturating_sub(1);
+        if self.tick_position > f64::from(limit) {
+            self.tick_position = f64::from(limit);
+        }
+        // a loop set behind the position pulls it back: what was already
+        // played stays played, nothing is replayed or skipped backwards
+        self.last_tick = self.last_tick.min(limit);
+    }
+
+    #[cfg(test)]
+    pub fn advance_tick(&mut self, tick: u32) {
+        self.needs_init = false;
+        self.last_tick = self.get_tick();
+        self.tick_position += f64::from(tick);
+    }
+}
+
+pub fn tick_increase(tempo_bpm: u32, elapsed_seconds: f64) -> f64 {
+    let tempo_bps = f64::from(tempo_bpm) / 60.0;
+    f64::from(QUARTER_TIME) * tempo_bps * elapsed_seconds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::midi_builder::MidiBuilder;
+    use crate::parser::test_support::parse_gp_file;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    #[test]
+    fn test_tick_increase() {
+        let tempo = 100;
+        let elapsed = Duration::from_millis(32);
+        let result = tick_increase(tempo, elapsed.as_secs_f64());
+        assert!((result - 51.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_tick_increase_bis() {
+        let tempo = 120;
+        let elapsed = Duration::from_millis(100);
+        let result = tick_increase(tempo, elapsed.as_secs_f64());
+        assert!((result - 192.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fractional_ticks_accumulate_across_advances() {
+        let mut sequencer = MidiSequencer::new(vec![]);
+        // first advance after reset bumps to tick 1
+        sequencer.advance(120, 0.0);
+        assert_eq!(sequencer.get_tick(), 1);
+
+        // simulate 1000 audio callbacks of 5.8 ms each at 120 BPM
+        // (256 frames at 44.1 kHz), i.e. 11.136 ticks per callback
+        for _ in 0..1000 {
+            sequencer.advance(120, 0.0058);
+        }
+
+        // exact total: 1 + 11.136 * 1000 = 11137 ticks
+        // truncating per callback would yield 11001 (~1.2% slow)
+        let expected = 1 + 11_136;
+        assert!((i64::from(sequencer.get_tick()) - expected).abs() <= 1);
+    }
+
+    #[test]
+    fn sub_tick_advances_do_not_retrigger_init() {
+        let mut sequencer = MidiSequencer::new(vec![]);
+        sequencer.advance(120, 0.0);
+        assert_eq!(sequencer.get_tick(), 1);
+
+        // 0.4 ms at 120 BPM is 0.768 ticks: no whole tick passes,
+        // so current_tick stalls at 1 with last_tick == current_tick
+        sequencer.advance(120, 0.0004);
+        assert_eq!(sequencer.get_tick(), 1);
+        assert_eq!(sequencer.get_last_tick(), 1);
+
+        // the next sub-tick advance must accumulate to a whole tick,
+        // not fall back into the init path (which would reset the position)
+        sequencer.advance(120, 0.0004);
+        assert_eq!(sequencer.get_tick(), 2);
+        assert_eq!(sequencer.get_last_tick(), 1);
+    }
+    #[test]
+    fn a_loop_ending_behind_the_position_holds_it_without_panicking() {
+        let events = vec![MidiEvent {
+            tick: 100,
+            event: MidiEventType::NoteOn(0, 60, 95),
+            track: Some(0),
+        }];
+        let mut sequencer = MidiSequencer::new(events);
+        sequencer.advance(120, 0.0);
+        for _ in 0..30 {
+            sequencer.advance(120, 0.1);
+        }
+        assert!(sequencer.get_tick() > 3000);
+
+        // the audio thread sees a loop over earlier measures before the seek
+        sequencer.advance(120, 0.1);
+        sequencer.hold_before(1000);
+        assert_eq!(sequencer.get_tick(), 999);
+        assert!(sequencer.get_last_tick() <= sequencer.get_tick());
+        assert_eq!(sequencer.get_next_events(), Some(&[][..]));
+    }
+
+    #[test]
+    fn the_tempo_at_a_tick_is_the_last_change_before_it() {
+        let tempo = |tick, bpm| MidiEvent::new_tempo_change(tick, bpm);
+        let note = MidiEvent::new_note_on(150, 0, 60, 95, 0);
+        let sequencer = MidiSequencer::new(vec![tempo(1, 170), note, tempo(300, 180)]);
+        assert_eq!(sequencer.tempo_at(0), None);
+        assert_eq!(sequencer.tempo_at(1), Some(170));
+        assert_eq!(sequencer.tempo_at(299), Some(170));
+        assert_eq!(sequencer.tempo_at(300), Some(180));
+        assert_eq!(sequencer.tempo_at(5000), Some(180));
+    }
+
+    #[test]
+    fn clock_jumps_are_clamped() {
+        let mut sequencer = MidiSequencer::new(vec![]);
+        sequencer.advance(120, 0.0); // init: tick 1
+
+        // an hour-long elapsed request advances playback by at most 0.5s of
+        // ticks: 120 BPM = 2 quarters/s * 960 * 0.5 = 960
+        sequencer.advance(120, 3600.0);
+        assert_eq!(sequencer.get_tick(), 961);
+    }
+
+    #[test]
+    fn sequence_delivers_every_event_once() {
+        const FILE_PATH: &str = "test-files/effects.gp5";
+        let song = parse_gp_file(FILE_PATH).unwrap();
+        let song = Rc::new(song);
+        let builder = MidiBuilder::new();
+        let events = builder.build_for_song(&song);
+        assert_eq!(events[0].tick, 1);
+        let mut sequencer = MidiSequencer::new(events.clone());
+
+        // last_tick:0 current_tick:0
+        let batch = sequencer.get_next_events().unwrap();
+        assert_eq!(batch.len(), 0);
+
+        // advance time by 1 tick
+        sequencer.advance_tick(1);
+
+        // last_tick:0 current_tick:1
+        let batch = sequencer.get_next_events().unwrap();
+        let count_1 = batch.len();
+        assert_eq!(&events[0..count_1], batch);
+        assert!(batch.iter().all(MidiEvent::is_midi_message));
+
+        let mut pos = count_1;
+        loop {
+            let prev_tick = sequencer.get_tick();
+            // advance time by 112 tick
+            sequencer.advance_tick(112);
+            let next_tick = sequencer.get_tick();
+            assert_eq!(next_tick - prev_tick, 112);
+
+            if let Some(batch) = sequencer.get_next_events() {
+                let count = batch.len();
+                assert_eq!(&events[pos..pos + count], batch);
+                pos += count;
+            } else {
+                break;
+            }
+        }
+        assert_eq!(pos, events.len());
+    }
+
+    #[test]
+    fn duplicate_ticks_are_delivered_exactly_once() {
+        // chords produce several events at the same tick; batch boundaries
+        // landing exactly on such a tick must neither drop nor replay events
+        let event = |tick, key| MidiEvent {
+            tick,
+            event: MidiEventType::NoteOn(0, key, 95),
+            track: Some(0),
+        };
+        let events = vec![
+            event(5, 60),
+            // chord at tick 10
+            event(10, 60),
+            event(10, 64),
+            event(10, 67),
+            // chord at tick 20
+            event(20, 60),
+            event(20, 64),
+        ];
+        let mut sequencer = MidiSequencer::new(events.clone());
+
+        // first batch ends exactly on the chord tick: all three notes included
+        sequencer.advance_tick(10); // last:0 current:10
+        let batch = sequencer.get_next_events().unwrap();
+        assert_eq!(batch, &events[0..4]);
+
+        // next batch starts from the duplicated tick: nothing replayed
+        sequencer.advance_tick(10); // last:10 current:20
+        let batch = sequencer.get_next_events().unwrap();
+        assert_eq!(batch, &events[4..6]);
+
+        // all events consumed
+        sequencer.advance_tick(10); // last:20 current:30
+        assert!(sequencer.get_next_events().is_none());
+    }
+
+    #[test]
+    fn set_tick_includes_events_at_target() {
+        // events at ticks 100, 200, 300
+        let events = vec![
+            MidiEvent {
+                tick: 100,
+                event: MidiEventType::NoteOn(0, 60, 95),
+                track: Some(0),
+            },
+            MidiEvent {
+                tick: 200,
+                event: MidiEventType::NoteOn(0, 62, 95),
+                track: Some(0),
+            },
+            MidiEvent {
+                tick: 300,
+                event: MidiEventType::NoteOn(0, 64, 95),
+                track: Some(0),
+            },
+        ];
+        let mut sequencer = MidiSequencer::new(events);
+
+        // seek to tick 200 — set_tick sets last_tick and tick_position to 199
+        sequencer.set_tick(200);
+        // first advance takes the init path: last_tick stays 199, current tick becomes 200
+        sequencer.advance(120, 0.0);
+        let batch = sequencer.get_next_events().unwrap();
+
+        // should include the event at tick 200
+        assert!(
+            batch.iter().any(|e| e.tick == 200),
+            "set_tick should include events at the target tick, got: {batch:?}"
+        );
+        // should NOT include event at tick 100 (before target)
+        assert!(
+            !batch.iter().any(|e| e.tick == 100),
+            "set_tick should not include events before target tick"
+        );
+    }
+
+    #[test]
+    fn set_tick_on_song_with_repeats() {
+        // verify seeking works correctly with repeat-expanded events
+        const FILE_PATH: &str = "test-files/repeat-close-alternate-endings.gp5";
+        let song = parse_gp_file(FILE_PATH).unwrap();
+        let playback_order =
+            crate::audio::playback_order::compute_playback_order(&song.measure_headers);
+
+        // build measure_playback_ticks (same logic as AudioPlayer::new)
+        let measure_playback_ticks = crate::audio::playback_order::first_playback_ticks(
+            &song.measure_headers,
+            &playback_order,
+        );
+
+        let song = Rc::new(song);
+        let builder = MidiBuilder::new();
+        let events = builder.build_for_song(&song);
+        let mut sequencer = MidiSequencer::new(events.clone());
+
+        // seek to the second ending, played after the repeat
+        let target_measure = 3;
+        let target_tick = measure_playback_ticks[target_measure];
+        assert!(
+            target_tick > 0,
+            "the second ending should have a non-zero playback tick"
+        );
+
+        sequencer.set_tick(target_tick);
+        sequencer.advance(120, 0.0);
+        let batch = sequencer.get_next_events().unwrap();
+
+        // verify we get events at or near the target tick, not from earlier measures
+        if !batch.is_empty() {
+            let min_tick = batch.iter().map(|e| e.tick).min().unwrap();
+            assert!(
+                min_tick >= target_tick,
+                "After seeking to tick {target_tick}, got events at tick {min_tick}"
+            );
+        }
+    }
+}

@@ -1,0 +1,83 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run MacGuitar",
+      "detail": "Debug build, started with the window (Cmd+Shift+B)",
+      "type": "cargo",
+      "command": "run",
+      "problemMatcher": ["$rustc"],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "silent", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "Run MacGuitar (release)",
+      "type": "cargo",
+      "command": "run",
+      "args": ["--release"],
+      "problemMatcher": ["$rustc"],
+      "group": "build",
+      "presentation": { "reveal": "silent", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "Run MacGuitar with a tab",
+      "type": "cargo",
+      "command": "run",
+      "args": ["--", "--tab-file-path", "${input:tabFile}"],
+      "problemMatcher": ["$rustc"],
+      "group": "build",
+      "presentation": { "reveal": "silent", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "Build",
+      "type": "cargo",
+      "command": "build",
+      "problemMatcher": ["$rustc"],
+      "group": "build"
+    },
+    {
+      "label": "Test",
+      "type": "cargo",
+      "command": "test",
+      "problemMatcher": ["$rustc"],
+      "group": { "kind": "test", "isDefault": true }
+    },
+    {
+      "label": "Clippy",
+      "type": "cargo",
+      "command": "clippy",
+      "args": ["--all-targets"],
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "Bundle macOS app",
+      "detail": "target/macos-arm64/MacGuitar.app",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/bundle-macos.sh",
+      "problemMatcher": ["$rustc"],
+      "group": "build"
+    },
+    {
+      "label": "Install macOS app",
+      "detail": "Bundle and copy to /Applications",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/bundle-macos.sh --install",
+      "problemMatcher": ["$rustc"],
+      "group": "build"
+    },
+    {
+      "label": "Regenerate icons",
+      "detail": "From resources/icon/icon.svg (needs rsvg-convert)",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/build-icons.sh",
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "tabFile",
+      "type": "promptString",
+      "description": "Path to a Guitar Pro file (.gp, .gpx, .gp5, .gp4, .gp3)"
+    }
+  ]
+}

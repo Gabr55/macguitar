@@ -1,0 +1,711 @@
+//! The music of a GP3/4/5 file: tracks, measures, voices, beats and notes.
+
+use crate::parser::gp345::primitive_parser::{
+    parse_byte_size_string, parse_i8, parse_int, parse_int_byte_sized_string, parse_short,
+    parse_u8, skip,
+};
+use crate::parser::gp345::song_parser::{
+    parse_beat_effects, parse_chord, parse_color, parse_duration, parse_measure_headers,
+    parse_note_effects,
+};
+use crate::parser::model::{
+    Beat, DirectionJump, DirectionTarget, GpVersion, MAX_VOICES, Measure, MeasureHeader, Note,
+    NoteEffect, NoteType, QUARTER_TIME, Song, Track, Voice, convert_velocity,
+};
+use nom::multi::count;
+use nom::{IResult, Parser};
+
+/// A navigation sign of the score.
+#[derive(Debug, Clone, Copy)]
+enum Direction {
+    Target(DirectionTarget),
+    Jump(DirectionJump),
+}
+
+/// The signs of a GP5 file, in the order it stores the measure of each, as
+/// alphaTab reads them.
+const GP5_DIRECTIONS: [Direction; 19] = {
+    use Direction::{Jump, Target};
+    use DirectionJump::{
+        DaCapo, DaCapoAlCoda, DaCapoAlDoubleCoda, DaCapoAlFine, DaCoda, DaDoubleCoda, DaSegno,
+        DaSegnoAlCoda, DaSegnoAlDoubleCoda, DaSegnoAlFine, DaSegnoSegno, DaSegnoSegnoAlCoda,
+        DaSegnoSegnoAlDoubleCoda, DaSegnoSegnoAlFine,
+    };
+    use DirectionTarget::{Coda, DoubleCoda, Fine, Segno, SegnoSegno};
+    [
+        Target(Coda),
+        Target(DoubleCoda),
+        Target(Segno),
+        Target(SegnoSegno),
+        Target(Fine),
+        Jump(DaCapo),
+        Jump(DaCapoAlCoda),
+        Jump(DaCapoAlDoubleCoda),
+        Jump(DaCapoAlFine),
+        Jump(DaSegno),
+        Jump(DaSegnoAlCoda),
+        Jump(DaSegnoAlDoubleCoda),
+        Jump(DaSegnoAlFine),
+        Jump(DaSegnoSegno),
+        Jump(DaSegnoSegnoAlCoda),
+        Jump(DaSegnoSegnoAlDoubleCoda),
+        Jump(DaSegnoSegnoAlFine),
+        Jump(DaCoda),
+        Jump(DaDoubleCoda),
+    ]
+};
+
+/// Put each sign on its measure: `measures` holds, per sign of
+/// [`GP5_DIRECTIONS`], its 1-based measure or -1 when the score has none.
+fn place_directions(headers: &mut [MeasureHeader], measures: &[i16]) {
+    for (direction, &measure) in GP5_DIRECTIONS.iter().zip(measures) {
+        let Some(header) = usize::try_from(measure)
+            .ok()
+            .and_then(|m| m.checked_sub(1))
+            .and_then(|index| headers.get_mut(index))
+        else {
+            continue;
+        };
+        match *direction {
+            Direction::Target(target) => header.targets.push(target),
+            Direction::Jump(jump) => header.jumps.push(jump),
+        }
+    }
+}
+
+pub struct MusicParser {
+    song: Song,
+}
+
+impl MusicParser {
+    pub const fn new(song: Song) -> Self {
+        Self { song }
+    }
+    pub fn take_song(&mut self) -> Song {
+        std::mem::take(&mut self.song)
+    }
+
+    pub fn parse_music_data<'a>(&'a mut self, i: &'a [u8]) -> IResult<&'a [u8], ()> {
+        let mut i = i;
+        let song_version = self.song.version;
+
+        let mut directions = Vec::new();
+        if song_version >= GpVersion::GP5 {
+            let (inner, measures) = count(parse_short, GP5_DIRECTIONS.len()).parse(i)?;
+            directions = measures;
+            // master reverb
+            i = skip(inner, 4);
+        }
+
+        let (i, (measure_count, track_count)) = (
+            parse_int, // Measure count
+            parse_int, // Track count
+        )
+            .parse(i)?;
+
+        log::debug!(
+            "Parsing music data -> track_count: {track_count} measure_count {measure_count}"
+        );
+
+        // bound the counts to avoid huge allocations on corrupt files
+        if !(1..=65536).contains(&measure_count) || !(1..=256).contains(&track_count) {
+            log::error!("Invalid measure count {measure_count} or track count {track_count}");
+            return Err(nom::Err::Failure(nom::error::Error::new(
+                i,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+
+        let song_tempo = self.song.tempo.value;
+        let song_key = self.song.key_signature;
+        let (i, measure_headers) =
+            parse_measure_headers(measure_count, song_tempo, song_version, song_key)(i)?;
+        self.song.measure_headers = measure_headers;
+        place_directions(&mut self.song.measure_headers, &directions);
+
+        let (i, tracks) = self.parse_tracks(track_count as usize)(i)?;
+        self.song.tracks = tracks;
+
+        let (i, _measures) = self.parse_measures(measure_count, track_count)(i)?;
+
+        Ok((i, ()))
+    }
+
+    fn parse_tracks(
+        &mut self,
+        tracks_count: usize,
+    ) -> impl FnMut(&[u8]) -> IResult<&[u8], Vec<Track>> + '_ {
+        move |i| {
+            log::debug!("Parsing {tracks_count} tracks");
+            let mut i = i;
+            let mut tracks = Vec::with_capacity(tracks_count);
+            for index in 1..=tracks_count {
+                let (inner, track) = self.parse_track(index)(i)?;
+                i = inner;
+                tracks.push(track);
+            }
+            // tracks done
+            if self.song.version == GpVersion::GP5 {
+                i = skip(i, 2);
+            }
+
+            if self.song.version > GpVersion::GP5 {
+                i = skip(i, 1);
+            }
+
+            Ok((i, tracks))
+        }
+    }
+
+    fn parse_track(&mut self, number: usize) -> impl FnMut(&[u8]) -> IResult<&[u8], Track> + '_ {
+        move |i| {
+            log::debug!("--------");
+            log::debug!("Parsing track {number}");
+            let mut i = skip(i, 1);
+            let mut track = Track::default();
+
+            if self.song.version >= GpVersion::GP5
+                && (number == 1 || self.song.version == GpVersion::GP5)
+            {
+                i = skip(i, 1);
+            };
+
+            track.number = number as i32;
+
+            // track name
+            let (inner, name) = parse_byte_size_string(40)(i)?;
+            i = inner;
+            log::debug!("Track name:{name}");
+            track.name = name;
+
+            // string count
+            let (inner, string_count) = parse_int(i)?;
+            i = inner;
+            log::debug!("String count: {string_count}");
+            if string_count <= 0 {
+                log::error!("Invalid string count {string_count} for track {number}");
+                return Err(nom::Err::Failure(nom::error::Error::new(
+                    i,
+                    nom::error::ErrorKind::Verify,
+                )));
+            }
+
+            // tunings
+            let (inner, tunings) = count(parse_int, 7).parse(i)?;
+            i = inner;
+            log::debug!("Tunings: {tunings:?}");
+            track.strings = tunings
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| (*i as i32) < string_count)
+                .map(|(i, &t)| (i as i32 + 1, t))
+                .collect();
+
+            // midi port
+            let (inner, port) = parse_int(i)?;
+            log::debug!("Midi port: {port:?}");
+            i = inner;
+            track.midi_port = port as u8;
+
+            // parse track channel info
+            let (inner, channel_id) = self.parse_track_channel()(i)?;
+            log::debug!("Midi channel id: {channel_id:?}");
+            track.channel_id = channel_id as u8;
+            i = inner;
+
+            // fret
+            let (inner, fret_count) = parse_int(i)?;
+            log::debug!("Fret count: {fret_count:?}");
+            i = inner;
+            track.fret_count = fret_count as u8;
+
+            // offset
+            let (inner, offset) = parse_int(i)?;
+            log::debug!("Offset: {offset:?}");
+            i = inner;
+            track.offset = offset;
+
+            // color
+            let (inner, color) = parse_color(i)?;
+            log::debug!("Color: {color:?}");
+            i = inner;
+            track.color = color;
+
+            if self.song.version == GpVersion::GP5 {
+                // skip 44
+                i = skip(i, 44);
+            } else if self.song.version == GpVersion::GP5_10 {
+                // skip 49
+                i = skip(i, 49);
+            };
+
+            if self.song.version > GpVersion::GP5 {
+                let (inner, _) = parse_int_byte_sized_string(i)?;
+                i = inner;
+                let (inner, _) = parse_int_byte_sized_string(i)?;
+                i = inner;
+            };
+            Ok((i, track))
+        }
+    }
+
+    /// Read MIDI channel. MIDI channel in Guitar Pro is represented by two integers.
+    /// First is zero-based number of channel, second is zero-based number of channel used for effects.
+    fn parse_track_channel(&mut self) -> impl FnMut(&[u8]) -> IResult<&[u8], i32> + '_ {
+        log::debug!("Parsing track channel");
+        |i| {
+            let (i, (mut gm_channel_1, mut gm_channel_2)) = (parse_int, parse_int).parse(i)?;
+            gm_channel_1 -= 1;
+            gm_channel_2 -= 1;
+
+            log::debug!("Track channel gm1: {gm_channel_1} gm2: {gm_channel_2}");
+
+            if let Some(channel) = self.song.midi_channels.get_mut(gm_channel_1 as usize) {
+                // if not percussion - set effect channel
+                if channel.channel_id != 9 {
+                    channel.effect_channel_id = gm_channel_2 as u8;
+                }
+            } else {
+                // the MIDI builder skips tracks with an unresolvable channel
+                log::warn!("channel {gm_channel_1} not found");
+            }
+            Ok((i, gm_channel_1))
+        }
+    }
+
+    /// Read measures. Measures are written in the following order:
+    /// - measure 1/track 1
+    /// - measure 1/track 2
+    /// - ...
+    /// - measure 1/track m
+    /// - measure 2/track 1
+    /// - measure 2/track 2
+    /// - ...
+    /// - measure 2/track m
+    /// - ...
+    /// - measure n/track 1
+    /// - measure n/track 2
+    /// - ...
+    /// - measure n/track m
+    fn parse_measures(
+        &mut self,
+        measure_count: i32,
+        track_count: i32,
+    ) -> impl FnMut(&[u8]) -> IResult<&[u8], ()> + '_ {
+        move |i: &[u8]| {
+            log::debug!("--------");
+            log::debug!("Parsing measures");
+            let mut start = QUARTER_TIME;
+            let mut i = i;
+            for measure_index in 0..measure_count as usize {
+                // set header start
+                self.song.measure_headers[measure_index].start = start;
+                for track_index in 0..track_count as usize {
+                    // push the measure on the track before parsing its beats, like
+                    // TuxGuitar, so tied notes can resolve against earlier beats of
+                    // the same measure
+                    self.song.tracks[track_index].measures.push(Measure {
+                        header_index: measure_index,
+                        track_index,
+                        ..Default::default()
+                    });
+                    let (inner, ()) = self.parse_measure(start, measure_index, track_index)(i)?;
+                    i = inner;
+                    if self.song.version >= GpVersion::GP5 {
+                        i = skip(i, 1);
+                    }
+                }
+                // update start with measure length
+                let measure_length = self.song.measure_headers[measure_index].length();
+                if measure_length == 0 {
+                    log::error!("Measure {measure_index} has a length of 0");
+                    return Err(nom::Err::Failure(nom::error::Error::new(
+                        i,
+                        nom::error::ErrorKind::Verify,
+                    )));
+                }
+                start += measure_length;
+            }
+            Ok((i, ()))
+        }
+    }
+
+    fn parse_measure(
+        &mut self,
+        measure_start: u32,
+        measure_index: usize,
+        track_index: usize,
+    ) -> impl FnMut(&[u8]) -> IResult<&[u8], ()> + '_ {
+        move |i: &[u8]| {
+            log::debug!("--------");
+            log::debug!("Parsing measure {measure_index} for track {track_index}");
+            let mut i = i;
+            let voice_count = if self.song.version >= GpVersion::GP5 {
+                MAX_VOICES
+            } else {
+                1
+            };
+            for voice_index in 0..voice_count {
+                // voices have the same start value
+                let beat_start = measure_start;
+                log::debug!("--------");
+                log::debug!("Parsing voice {voice_index}");
+                self.current_measure_mut(track_index).voices.push(Voice {
+                    measure_index: measure_index as i16,
+                    ..Default::default()
+                });
+                let (inner, ()) = self.parse_voice(beat_start, track_index, measure_index)(i)?;
+                i = inner;
+            }
+            Ok((i, ()))
+        }
+    }
+
+    /// The measure currently being parsed (last pushed on the track).
+    fn current_measure_mut(&mut self, track_index: usize) -> &mut Measure {
+        self.song.tracks[track_index]
+            .measures
+            .last_mut()
+            .expect("no measure being parsed")
+    }
+
+    fn parse_voice(
+        &mut self,
+        mut beat_start: u32,
+        track_index: usize,
+        measure_index: usize,
+    ) -> impl FnMut(&[u8]) -> IResult<&[u8], ()> + '_ {
+        move |i: &[u8]| {
+            let mut i = i;
+            let (inner, beats) = parse_int(i)?;
+            i = inner;
+            log::debug!("--------");
+            log::debug!("...with {beats} beats");
+            for b in 1..=beats {
+                log::debug!("--------");
+                log::debug!("Parsing beat {b}");
+                let (inner, beat) = self.parse_beat(beat_start, track_index, measure_index)(i)?;
+                if !beat.empty {
+                    beat_start += beat.duration.time();
+                }
+                i = inner;
+                self.current_measure_mut(track_index)
+                    .voices
+                    .last_mut()
+                    .expect("no voice being parsed")
+                    .beats
+                    .push(beat);
+            }
+            Ok((i, ()))
+        }
+    }
+
+    fn parse_beat(
+        &mut self,
+        start: u32,
+        track_index: usize,
+        measure_index: usize,
+    ) -> impl FnMut(&[u8]) -> IResult<&[u8], Beat> + '_ {
+        move |i: &[u8]| {
+            let mut i = i;
+            let (inner, flags) = parse_u8(i)?;
+            i = inner;
+
+            // make new beat at starting time
+            let mut beat = Beat {
+                start,
+                ..Default::default()
+            };
+
+            // beat type
+            if (flags & 0x40) != 0 {
+                let (inner, beat_type) = parse_u8(i)?;
+                i = inner;
+                // GP3/GP4 write this byte but the beat still advances time;
+                // only GP5 empty beats freeze the cursor (TuxGuitar discards
+                // the byte for older versions)
+                if self.song.version >= GpVersion::GP5 {
+                    beat.empty = beat_type & 0x02 == 0;
+                }
+            }
+
+            // beat duration is an eighth note
+            let (inner, duration) = parse_duration(flags)(i)?;
+            beat.duration = duration;
+            i = inner;
+
+            // beat chords
+            if (flags & 0x02) != 0 {
+                let track = &self.song.tracks[track_index];
+                let (inner, chord) = parse_chord(track.strings.len() as u8, self.song.version)(i)?;
+                i = inner;
+                beat.effect.chord = Some(chord);
+            }
+
+            // beat text
+            if (flags & 0x04) != 0 {
+                let (inner, text) = parse_int_byte_sized_string(i)?;
+                i = inner;
+                log::debug!("Beat text: {text}");
+                beat.text = text;
+            }
+
+            let mut note_effect = NoteEffect::default();
+            // beat effect
+            if (flags & 0x08) != 0 {
+                let (inner, ()) =
+                    parse_beat_effects(&mut beat, &mut note_effect, self.song.version)(i)?;
+                i = inner;
+            }
+
+            // parse mix change
+            if (flags & 0x10) != 0 {
+                let (inner, ()) = self.parse_mix_change(measure_index)(i)?;
+                i = inner;
+            }
+
+            // parse notes
+            let (inner, string_flags) = parse_u8(i)?;
+            i = inner;
+            let track = &self.song.tracks[track_index];
+            log::debug!(
+                "Parsing notes for beat strings:{}, flags:{string_flags:08b}",
+                track.strings.len()
+            );
+            for (string_id, string_value) in track.strings.iter().enumerate() {
+                if string_flags & (1 << (7 - string_value.0)) > 0 {
+                    log::debug!("Parsing note for string {}", string_id + 1);
+                    let mut note = Note::new(note_effect.clone());
+                    let (inner, ()) = self.parse_note(&mut note, string_value, track_index)(i)?;
+                    i = inner;
+                    beat.notes.push(note);
+                }
+            }
+
+            if self.song.version >= GpVersion::GP5 {
+                i = skip(i, 1);
+                let (inner, read) = parse_u8(i)?;
+                i = inner;
+                if (read & 0x08) != 0 {
+                    i = skip(i, 1);
+                }
+            }
+            Ok((i, beat))
+        }
+    }
+
+    /// Get note value of tied note.
+    ///
+    /// Mirrors TuxGuitar's `getTiedNoteValue`: scan measures newest-first, then
+    /// beats newest-first, then voices in order, returning the most recent note
+    /// previously played on the same string.
+    fn get_tied_note_value(&self, string_index: i8, track_index: usize) -> i16 {
+        let track = &self.song.tracks[track_index];
+        for measure in track.measures.iter().rev() {
+            let beat_count = measure
+                .voices
+                .iter()
+                .map(|v| v.beats.len())
+                .max()
+                .unwrap_or(0);
+            for b in (0..beat_count).rev() {
+                for voice in &measure.voices {
+                    if let Some(beat) = voice.beats.get(b) {
+                        for note in &beat.notes {
+                            if note.string == string_index {
+                                return note.value;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        -1
+    }
+
+    fn parse_mix_change(
+        &mut self,
+        measure_index: usize,
+    ) -> impl FnMut(&[u8]) -> IResult<&[u8], ()> + '_ {
+        move |i: &[u8]| {
+            log::debug!("Parsing mix change");
+            let mut i = i;
+
+            // instrument
+            let (inner, _) = parse_i8(i)?;
+            i = inner;
+
+            if self.song.version >= GpVersion::GP5 {
+                i = skip(i, 16);
+            }
+
+            let (inner, (volume, pan, chorus, reverb, phaser, tremolo)) =
+                (parse_i8, parse_i8, parse_i8, parse_i8, parse_i8, parse_i8).parse(i)?;
+            i = inner;
+
+            let tempo_name = if self.song.version >= GpVersion::GP5 {
+                let (inner, tempo_name_tmp) = parse_int_byte_sized_string(i)?;
+                log::debug!("Tempo name: {tempo_name_tmp}");
+                i = inner;
+                tempo_name_tmp
+            } else {
+                String::new()
+            };
+
+            let (inner, tempo_value) = parse_int(i)?;
+            i = inner;
+
+            if volume >= 0 {
+                i = skip(i, 1);
+            }
+            if pan >= 0 {
+                i = skip(i, 1);
+            }
+            if chorus >= 0 {
+                i = skip(i, 1);
+            }
+            if reverb >= 0 {
+                i = skip(i, 1);
+            }
+            if phaser >= 0 {
+                i = skip(i, 1);
+            }
+            if tremolo >= 0 {
+                i = skip(i, 1);
+            }
+
+            if tempo_value >= 0 {
+                // update tempo value for all next measure headers
+                self.song.measure_headers[measure_index..]
+                    .iter_mut()
+                    .for_each(|mh| {
+                        // clamp to 1 BPM like the gp67 builder: tempo 0 would freeze playback
+                        mh.tempo.value = (tempo_value as u32).max(1);
+                        mh.tempo.name = Some(tempo_name.clone());
+                    });
+                i = skip(i, 1);
+                if self.song.version > GpVersion::GP5 {
+                    i = skip(i, 1);
+                }
+            }
+
+            // GP3 has no trailing byte after the mix change block.
+            if self.song.version > GpVersion::GP3 {
+                i = skip(i, 1);
+            }
+
+            if self.song.version >= GpVersion::GP5 {
+                i = skip(i, 1);
+                if self.song.version > GpVersion::GP5 {
+                    let (inner, _) =
+                        (parse_int_byte_sized_string, parse_int_byte_sized_string).parse(i)?;
+                    i = inner;
+                }
+            }
+
+            Ok((i, ()))
+        }
+    }
+
+    fn parse_note<'a>(
+        &'a self,
+        note: &'a mut Note,
+        guitar_string: &'a (i32, i32),
+        track_index: usize,
+    ) -> impl FnMut(&[u8]) -> IResult<&[u8], ()> + 'a {
+        move |i| {
+            log::debug!("Parsing note {guitar_string:?}");
+            let mut i = i;
+            let (inner, flags) = parse_u8(i)?;
+            i = inner;
+            let string = guitar_string.0 as i8;
+            note.string = string;
+            note.effect.heavy_accentuated_note = (flags & 0x02) == 0x02;
+            note.effect.ghost_note = (flags & 0x04) == 0x04;
+            note.effect.accentuated_note = (flags & 0x40) == 0x40;
+
+            // note type
+            if (flags & 0x20) != 0 {
+                let (inner, note_type) = parse_u8(i)?;
+                i = inner;
+                note.kind = NoteType::get_note_type(note_type);
+            }
+
+            // duration percent GP4
+            if (flags & 0x01) != 0 && self.song.version <= GpVersion::GP4_06 {
+                i = skip(i, 2);
+            }
+
+            // note velocity
+            if (flags & 0x10) != 0 {
+                let (inner, velocity) = parse_i8(i)?;
+                i = inner;
+                note.velocity = convert_velocity(i16::from(velocity));
+            }
+
+            // note value
+            if (flags & 0x20) != 0 {
+                let (inner, fret) = parse_i8(i)?;
+                i = inner;
+
+                let value = if note.kind == NoteType::Tie {
+                    self.get_tied_note_value(string, track_index)
+                } else {
+                    i16::from(fret)
+                };
+                // value is between 0 and 99
+                if (0..100).contains(&value) {
+                    note.value = value;
+                } else {
+                    note.value = 0;
+                }
+            }
+
+            // fingering
+            if (flags & 0x80) != 0 {
+                i = skip(i, 2);
+            }
+
+            if self.song.version >= GpVersion::GP5 {
+                // duration percent GP5
+                if (flags & 0x01) != 0 {
+                    i = skip(i, 8);
+                }
+
+                // swap accidentals
+                let (inner, swap) = parse_u8(i)?;
+                i = inner;
+                note.swap_accidentals = swap & 0x02 == 0x02;
+            }
+
+            if (flags & 0x08) != 0 {
+                let (inner, ()) = parse_note_effects(note, self.song.version)(i)?;
+                i = inner;
+            }
+
+            Ok((i, ()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use super::*;
+
+    #[test]
+    fn gp5_signs_land_on_their_measures() {
+        let mut headers: Vec<MeasureHeader> = (0..4).map(|_| MeasureHeader::default()).collect();
+        let mut measures = [-1_i16; 19];
+        measures[2] = 2; // segno on measure 2
+        measures[10] = 4; // D.S. al Coda on measure 4
+        measures[17] = 99; // To Coda past the end: dropped
+        place_directions(&mut headers, &measures);
+        assert_eq!(headers[1].targets, vec![DirectionTarget::Segno]);
+        assert_eq!(headers[3].jumps, vec![DirectionJump::DaSegnoAlCoda]);
+        assert!(
+            headers
+                .iter()
+                .all(|h| !h.jumps.contains(&DirectionJump::DaCoda))
+        );
+    }
+}
