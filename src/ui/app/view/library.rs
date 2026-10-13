@@ -75,8 +75,8 @@ impl App {
         let actions = if albums.is_empty() {
             row![self.busy_note()]
         } else {
+            // the note goes last, so the buttons line up with the title
             row![
-                self.busy_note(),
                 labelled_button(
                     Icon::Folder,
                     "Import a folder",
@@ -85,6 +85,7 @@ impl App {
                     tokens
                 ),
                 labelled_button(Icon::Plus, "New album", Message::NewAlbum, true, tokens),
+                self.busy_note(),
             ]
         }
         .spacing(10)
