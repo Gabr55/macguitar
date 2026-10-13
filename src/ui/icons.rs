@@ -30,6 +30,14 @@ pub enum Icon {
     Recent,
     ZoomIn,
     ZoomOut,
+    Library,
+    Plus,
+    Trash,
+    Back,
+    Document,
+    Check,
+    Folder,
+    Close,
 }
 
 impl Icon {
@@ -85,6 +93,22 @@ impl Icon {
                 r#"<path d="M9 18V5.5l11-2V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>"#
             }
             Self::Up => r#"<path d="M6 15l6-6 6 6"/>"#,
+            Self::Library => {
+                r#"<path d="M4.5 4.5h4v15h-4z"/><path d="M8.5 6.5h4v13h-4z"/><path d="M13.6 6.9l3.7-1.2 3.9 12.8-3.7 1.2z"/>"#
+            }
+            Self::Plus => r#"<path d="M12 5v14"/><path d="M5 12h14"/>"#,
+            Self::Trash => {
+                r#"<path d="M4.5 7h15"/><path d="M9.5 7V5h5v2"/><path d="M6.5 7l1 12.5h9l1-12.5"/><path d="M10.2 10.5v6"/><path d="M13.8 10.5v6"/>"#
+            }
+            Self::Back => r#"<path d="M14.5 6l-6 6 6 6"/>"#,
+            Self::Document => {
+                r#"<path d="M6.5 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10.5a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5z"/><path d="M13.5 3.5v4h4"/><path d="M9 12.5h6"/><path d="M9 16h6"/>"#
+            }
+            Self::Check => r#"<path d="M5.5 12.5l4 4 9-9"/>"#,
+            Self::Folder => {
+                r#"<path d="M3.5 7V6a1.5 1.5 0 0 1 1.5-1.5h4l2 2.2h8a1.5 1.5 0 0 1 1.5 1.5v9.8a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z"/><path d="M12 10v6"/><path d="M9 13h6"/>"#
+            }
+            Self::Close => r#"<path d="M6.5 6.5l11 11"/><path d="M17.5 6.5l-11 11"/>"#,
             Self::ZoomIn => {
                 r#"<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.3 15.3l5 5"/><path d="M10.5 7.8v5.4"/><path d="M7.8 10.5h5.4"/>"#
             }

@@ -1,11 +1,11 @@
 //! The welcome screen, until a file is opened.
 
-use iced::widget::{Space, center, column, container, responsive, row, text};
+use iced::widget::{Space, button, center, column, container, responsive, row, text};
 use iced::{Alignment, Element};
 
 use crate::ui::app::App;
 use crate::ui::app::message::Message;
-use crate::ui::icons::logo;
+use crate::ui::icons::{Icon, icon, logo};
 use crate::ui::theme::{self, Tokens};
 use crate::ui::widgets::{UI_FONT_BOLD, muted, open_button};
 
@@ -56,7 +56,22 @@ impl App {
         let open: Element<'_, Message> = if is_loading {
             muted("Loading\u{2026}").size(14).into()
         } else {
-            open_button("Open a tab", true, tokens)
+            row![
+                open_button("Open a tab", true, tokens),
+                button(
+                    row![
+                        icon(Icon::Library, 16.0, tokens.text),
+                        text("Library").size(14).font(UI_FONT_BOLD)
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center)
+                )
+                .padding([8, 14])
+                .style(theme::secondary_button)
+                .on_press(Message::OpenLibrary),
+            ]
+            .spacing(10)
+            .into()
         };
 
         let shortcuts = row![

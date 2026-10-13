@@ -69,6 +69,44 @@ pub async fn pick_sound_font() -> Option<PathBuf> {
         .map(|file| file.path().to_path_buf())
 }
 
+/// Asks for files to add to an album: tabs, PDF tab books, a cover.
+pub async fn pick_album_files() -> Vec<PathBuf> {
+    let mut supported: Vec<&str> = SUPPORTED_EXTENSIONS.to_vec();
+    supported.extend(["pdf", "jpg", "jpeg", "png", "webp"]);
+    rfd::AsyncFileDialog::new()
+        .add_filter("Tabs, PDF and images", &supported)
+        .set_title("Add tabs, PDF tab books or a cover")
+        .pick_files()
+        .await
+        .map(|files| files.iter().map(|file| file.path().to_path_buf()).collect())
+        .unwrap_or_default()
+}
+
+/// Asks for a folder to make an album of; `None` when dismissed.
+pub async fn pick_album_folder() -> Option<PathBuf> {
+    rfd::AsyncFileDialog::new()
+        .set_title("Choose the folder of an album")
+        .pick_folder()
+        .await
+        .map(|folder| folder.path().to_path_buf())
+}
+
+/// Open `path` with the application the system gives its kind: a PDF in
+/// the PDF viewer.
+pub fn open_with_system(path: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(path).spawn().map(|_| ())
+}
+
 /// Reads the tablature at `path`.
 pub async fn load_tablature(path: PathBuf) -> Result<LoadedFile, FileError> {
     if !is_tablature(&path) {

@@ -9,7 +9,7 @@ mod update;
 mod view;
 
 pub use message::Message;
-use message::{Menu, TrackSelection};
+use message::{LibraryView, Menu, TrackSelection};
 use playback::PlaybackSettings;
 use song_info::SongDisplayInfo;
 
@@ -21,6 +21,7 @@ use crate::ApplicationArgs;
 use crate::audio::midi_player::AudioPlayer;
 use crate::cli::ThemeChoice;
 use crate::config::Config;
+use crate::library::Library;
 use crate::ui::tablature::Tablature;
 use crate::ui::theme;
 use crate::ui::widgets::UI_FONT;
@@ -79,6 +80,16 @@ pub struct App {
     menu: Option<(Menu, Rectangle)>,
     /// Size of the window, which a phone's screen makes compact.
     window_size: Size,
+
+    // the library
+    /// The albums, kept like books.
+    library: Library,
+    /// The library shown over the player, if it is.
+    library_view: Option<LibraryView>,
+    /// An album being made or filled, off the interface's thread.
+    library_busy: bool,
+    /// The album asked to be deleted, until confirmed.
+    deleting_album: Option<String>,
     /// How large the tablature is drawn, kept between songs and launches.
     zoom: f32,
     error_message: Option<String>,
@@ -169,6 +180,12 @@ impl App {
             is_fullscreen: false,
             menu: None,
             window_size: Size::new(WINDOW_WIDTH, WINDOW_HEIGHT),
+            library: Library::open(
+                Config::library_folder().unwrap_or_else(|_| PathBuf::from("library")),
+            ),
+            library_view: None,
+            library_busy: false,
+            deleting_album: None,
             zoom,
             error_message: None,
         }

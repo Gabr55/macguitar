@@ -2,6 +2,7 @@
 //! submodules handle one concern each.
 
 mod file;
+mod library;
 mod playback;
 mod practice;
 mod tracks;
@@ -10,7 +11,7 @@ mod window;
 use iced::Task;
 
 use crate::ui::app::App;
-use crate::ui::app::message::Message;
+use crate::ui::app::message::{LibraryView, Message};
 
 impl App {
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
@@ -23,6 +24,41 @@ impl App {
             }
             Message::OpenFile(path) => self.open_file(path),
             Message::FileLoaded(result) => self.file_loaded(result),
+            // library
+            Message::OpenLibrary => self.show_library(LibraryView::Shelf),
+            Message::CloseLibrary => self.close_library(),
+            Message::ShowLibrary(view) => self.show_library(view),
+            Message::NewAlbum => self.new_album(),
+            Message::ImportFolder => self.import_folder(),
+            Message::FolderPicked(folder) => self.folder_picked(folder),
+            Message::AddToAlbum(id) => self.add_to_album(id),
+            Message::FilesPicked(id, files) => self.files_picked(&id, files),
+            Message::AlbumReady(result) => self.album_ready(result),
+            Message::AlbumTitleChanged(id, title) => {
+                self.edit_album(&id, |album| album.title = title)
+            }
+            Message::AlbumArtistChanged(id, artist) => {
+                self.edit_album(&id, |album| album.artist = artist)
+            }
+            Message::ToggleBlock(id, song, block) => self.toggle_block(&id, song, block),
+            Message::PlaySong(id, song) => self.play_song(&id, song),
+            Message::OpenPdf(id, pdf) => self.open_pdf(&id, pdf),
+            Message::RemoveSong(id, song) => self.remove_from_album(&id, |album| {
+                (song < album.songs.len()).then(|| album.songs.remove(song).file)
+            }),
+            Message::RemovePdf(id, pdf) => self.remove_from_album(&id, |album| {
+                (pdf < album.pdfs.len()).then(|| album.pdfs.remove(pdf))
+            }),
+            Message::AskDeleteAlbum(id) => {
+                self.deleting_album = Some(id);
+                Task::none()
+            }
+            Message::DeleteAlbum(id) => self.delete_album(&id),
+            Message::CancelDelete => {
+                self.deleting_album = None;
+                Task::none()
+            }
+
             Message::Zoom(direction) => self.zoom(direction),
             Message::TouchDown(measure, beat) => self.touch_down(measure, beat),
             Message::TouchScrolled => self.touch_scrolled(),

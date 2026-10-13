@@ -123,6 +123,11 @@ impl Config {
         }
     }
 
+    /// The folder of the library: the albums and their files.
+    pub fn library_folder() -> Result<PathBuf, AppError> {
+        Ok(Self::get_base_path()?.join("library"))
+    }
+
     fn get_base_path() -> Result<PathBuf, AppError> {
         let home = home_dir()
             .ok_or_else(|| AppError::Config("Could not find home directory".to_string()))?;

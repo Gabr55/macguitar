@@ -3,8 +3,8 @@
 
 use iced::border::Radius;
 use iced::theme::{Mode, Palette};
-use iced::widget::{button, container, pick_list, progress_bar, scrollable, slider};
-use iced::{Background, Border, Color, Shadow, Theme, Vector};
+use iced::widget::{button, container, pick_list, progress_bar, scrollable, slider, text_input};
+use iced::{Background, Border, Color, Gradient, Radians, Shadow, Theme, Vector, gradient};
 
 use crate::cli::ThemeChoice;
 
@@ -461,5 +461,137 @@ pub fn scrollable_style(theme: &Theme, status: scrollable::Status) -> scrollable
         horizontal_rail: rail,
         gap: None,
         auto_scroll: default.auto_scroll,
+    }
+}
+
+// --- the library ---
+
+/// An album on the shelf: a card lifting its border when hovered.
+pub fn album_card(theme: &Theme, status: button::Status) -> button::Style {
+    let t = Tokens::of(theme);
+    let border = match status {
+        button::Status::Hovered | button::Status::Pressed => mix(t.border, t.accent, 0.55),
+        _ => t.border,
+    };
+    button::Style {
+        background: Some(t.raised.into()),
+        text_color: t.text,
+        border: Border::default()
+            .color(border)
+            .width(1)
+            .rounded(PANEL_RADIUS),
+        shadow: soft_shadow(&t),
+        snap: true,
+    }
+}
+
+/// A block of a song: filled with the accent once learned.
+pub fn block_chip(learned: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let t = Tokens::of(theme);
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let (background, text_color, border) = if learned {
+            let fill = if hovered { t.accent_hover } else { t.accent };
+            (fill, t.on_accent, fill)
+        } else {
+            let fill = if hovered {
+                mix(t.raised, t.accent, 0.12)
+            } else {
+                t.raised
+            };
+            let edge = if hovered {
+                mix(t.border, t.accent, 0.6)
+            } else {
+                t.border
+            };
+            (fill, t.text, edge)
+        };
+        button::Style {
+            background: Some(background.into()),
+            text_color,
+            border: Border::default()
+                .color(border)
+                .width(1)
+                .rounded(Radius::new(999.0)),
+            shadow: Shadow::default(),
+            snap: true,
+        }
+    }
+}
+
+/// A cover not set: a gradient of the accent towards a hue of the album's
+/// own, `seed` telling the albums apart.
+pub fn cover_placeholder(seed: u32) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let t = Tokens::of(theme);
+        // a hue per album, kept dark enough for white letters
+        let hues = [
+            Color::from_rgb8(0x6a, 0x4c, 0xff),
+            Color::from_rgb8(0x1f, 0x9d, 0x8b),
+            Color::from_rgb8(0xd9, 0x3f, 0x6a),
+            Color::from_rgb8(0x2f, 0x7c, 0xd6),
+            Color::from_rgb8(0x8e, 0x5a, 0x2b),
+        ];
+        let other = hues[seed as usize % hues.len()];
+        let gradient = gradient::Linear::new(Radians(2.3))
+            .add_stop(0.0, t.accent)
+            .add_stop(1.0, other);
+        container::Style {
+            background: Some(Background::Gradient(Gradient::Linear(gradient))),
+            text_color: Some(Color::WHITE),
+            border: Border::default().rounded(CONTROL_RADIUS),
+            ..container::Style::default()
+        }
+    }
+}
+
+/// An album's title or artist, edited in place: plain text until focused.
+pub fn title_input(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let t = Tokens::of(theme);
+    let border = match status {
+        text_input::Status::Focused { .. } => t.accent,
+        text_input::Status::Hovered => t.border,
+        _ => Color::TRANSPARENT,
+    };
+    text_input::Style {
+        background: Color::TRANSPARENT.into(),
+        border: Border::default()
+            .color(border)
+            .width(1)
+            .rounded(CONTROL_RADIUS),
+        icon: t.muted,
+        placeholder: t.muted,
+        value: t.text,
+        selection: t.accent_soft(),
+    }
+}
+
+/// A button whose action cannot be taken back: red when it asks.
+pub fn danger_button(theme: &Theme, status: button::Status) -> button::Style {
+    let t = Tokens::of(theme);
+    let background = match status {
+        button::Status::Hovered | button::Status::Pressed => mix(t.danger, Color::BLACK, 0.1),
+        _ => t.danger,
+    };
+    button::Style {
+        background: Some(background.into()),
+        text_color: Color::WHITE,
+        border: Border::default().rounded(CONTROL_RADIUS),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
+/// A song of an album, in the list of its page.
+pub fn song_card(theme: &Theme) -> container::Style {
+    let t = Tokens::of(theme);
+    container::Style {
+        background: Some(t.raised.into()),
+        text_color: Some(t.text),
+        border: Border::default()
+            .color(t.border)
+            .width(1)
+            .rounded(PANEL_RADIUS),
+        ..container::Style::default()
     }
 }

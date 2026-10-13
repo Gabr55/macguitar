@@ -12,6 +12,7 @@ use crate::ui::theme::{self, Tokens};
 use crate::ui::widgets::{error_dialog, icon_button, modal_layer};
 
 mod header;
+mod library;
 mod recent_files;
 mod track_menu;
 mod transport;
@@ -128,6 +129,25 @@ impl App {
             modal_layer(error_dialog(message, tokens), Message::ClearError)
         });
 
-        stack![window, title_bar, menu, error].into()
+        // the library covers the player, under the title bar the window
+        // moves by
+        let library = self.library_view.as_ref().map_or_else(nothing, |view| {
+            opaque(
+                container(self.library_layer(view, tokens))
+                    .padding(iced::Padding {
+                        top: if self.is_fullscreen {
+                            10.0
+                        } else {
+                            10.0 + TITLE_BAR_INSET
+                        },
+                        ..iced::Padding::new(10.0)
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(theme::window),
+            )
+        });
+
+        stack![window, library, title_bar, menu, error].into()
     }
 }

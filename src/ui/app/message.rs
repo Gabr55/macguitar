@@ -7,6 +7,7 @@ use std::fmt::Display;
 use crate::parser::model::Song;
 use crate::ui::tuning::tuning_label;
 
+use crate::library::Album;
 use crate::ui::files::{FileError, LoadedFile};
 use std::path::PathBuf;
 
@@ -145,6 +146,15 @@ impl Menu {
     }
 }
 
+/// What the library shows over the player.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LibraryView {
+    /// The albums, as covers on a shelf.
+    Shelf,
+    /// One album, by its id: its songs and their blocks.
+    Album(String),
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     // files
@@ -153,6 +163,32 @@ pub enum Message {
     TablaturePicked(Option<PathBuf>),
     OpenFile(PathBuf),
     FileLoaded(Result<LoadedFile, FileError>),
+
+    // library
+    OpenLibrary,
+    CloseLibrary,
+    ShowLibrary(LibraryView),
+    NewAlbum,
+    ImportFolder,
+    FolderPicked(Option<PathBuf>),
+    /// Add tabs, PDFs or a cover to the album.
+    AddToAlbum(String),
+    FilesPicked(String, Vec<PathBuf>),
+    /// An album made or changed off the interface's thread.
+    AlbumReady(Result<Album, String>),
+    AlbumTitleChanged(String, String),
+    AlbumArtistChanged(String, String),
+    /// Mark a block of a song of an album learned, or not.
+    ToggleBlock(String, usize, usize),
+    /// Open a song of an album in the player.
+    PlaySong(String, usize),
+    OpenPdf(String, usize),
+    RemoveSong(String, usize),
+    RemovePdf(String, usize),
+    /// Ask before deleting an album, then delete it, or not.
+    AskDeleteAlbum(String),
+    DeleteAlbum(String),
+    CancelDelete,
 
     // playback
     PlayPause,

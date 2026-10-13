@@ -167,9 +167,14 @@ impl App {
             open_button("Open", !self.is_loading, tokens)
         };
         header = header.push(
-            row![open, self.recent_files_button(tokens), fullscreen]
-                .spacing(6)
-                .align_y(Alignment::Center),
+            row![
+                open,
+                self.recent_files_button(tokens),
+                icon_button(Icon::Library, "Library", Some(Message::OpenLibrary), tokens),
+                fullscreen
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
         );
 
         let header = container(header)
