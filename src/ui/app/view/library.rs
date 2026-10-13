@@ -59,44 +59,74 @@ impl App {
             1 => format!("1 album \u{00b7} {}% learned", learned.percent()),
             count => format!("{count} albums \u{00b7} {}% learned", learned.percent()),
         };
-        let top = row![
-            column![
-                text("Library").size(24).font(UI_FONT_BOLD),
-                muted(summary).size(13),
-            ]
-            .spacing(2)
-            .width(Length::Fill),
-            self.busy_note(),
-            labelled_button(
-                Icon::Folder,
-                "Import a folder",
-                Message::ImportFolder,
-                false,
-                tokens
-            ),
-            labelled_button(Icon::Plus, "New album", Message::NewAlbum, true, tokens),
-            icon_button(
-                Icon::Close,
-                "Back to the player (Esc)",
-                Some(Message::CloseLibrary),
-                tokens
-            ),
+        let heading = column![
+            text("Library").size(24).font(UI_FONT_BOLD),
+            muted(summary).size(13),
         ]
+        .spacing(2)
+        .width(Length::Fill);
+        let close = icon_button(
+            Icon::Close,
+            "Back to the player (Esc)",
+            Some(Message::CloseLibrary),
+            tokens,
+        );
+        // an empty library has its buttons in the middle, not twice
+        let actions = if albums.is_empty() {
+            row![self.busy_note()]
+        } else {
+            row![
+                self.busy_note(),
+                labelled_button(
+                    Icon::Folder,
+                    "Import a folder",
+                    Message::ImportFolder,
+                    false,
+                    tokens
+                ),
+                labelled_button(Icon::Plus, "New album", Message::NewAlbum, true, tokens),
+            ]
+        }
         .spacing(10)
         .align_y(Alignment::Center);
+        // a phone held upright puts the actions under the title
+        let top: Element<'_, Message> = if self.is_narrow() {
+            column![row![heading, close].align_y(Alignment::Center), actions]
+                .spacing(12)
+                .into()
+        } else {
+            row![heading, actions, close]
+                .spacing(10)
+                .align_y(Alignment::Center)
+                .into()
+        };
 
         let body: Element<'_, Message> = if albums.is_empty() {
             center(
                 column![
                     icon(Icon::Library, 46.0, tokens.muted),
                     text("Your library is empty").size(18).font(UI_FONT_BOLD),
-                    muted(
-                        "Make an album of a folder of tabs: its PDF tab books and its cover \
-                         come along. Or start one and add the files you like."
+                    container(
+                        muted(
+                            "Make an album of a folder of tabs: its PDF tab books and its cover \
+                             come along. Or start one and add the files you like."
+                        )
+                        .size(14)
+                        .align_x(Alignment::Center)
                     )
-                    .size(14)
-                    .align_x(Alignment::Center)
-                    .width(420),
+                    .max_width(420),
+                    Space::new().height(4),
+                    row![
+                        labelled_button(
+                            Icon::Folder,
+                            "Import a folder",
+                            Message::ImportFolder,
+                            false,
+                            tokens
+                        ),
+                        labelled_button(Icon::Plus, "New album", Message::NewAlbum, true, tokens),
+                    ]
+                    .spacing(10),
                 ]
                 .spacing(12)
                 .align_x(Alignment::Center),

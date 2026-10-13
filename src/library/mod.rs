@@ -6,6 +6,7 @@
 //! and the album's. The files are copied into the library, one folder per
 //! album, next to `library.json`, which lists the albums.
 
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -267,7 +268,7 @@ pub fn add_files(root: &Path, mut album: Album, files: &[PathBuf]) -> Result<Alb
 pub fn album_from_folder(root: &Path, folder: &Path) -> Result<Album, String> {
     let mut files = Vec::new();
     collect(folder, 3, &mut files);
-    files.sort();
+    files.sort_by(|a, b| natural_order(&a.to_string_lossy(), &b.to_string_lossy()));
     if !files.iter().any(|file| Kind::of(file) == Some(Kind::Tab)) {
         return Err(format!("{} holds no tabs", folder.display()));
     }
@@ -421,9 +422,51 @@ fn make_cover(folder: &Path, image: &Path) -> Result<String, String> {
     Ok(COVER_FILE.to_string())
 }
 
+/// Names in the order a person reads them: case aside, and "2" before "10".
+pub fn natural_order(a: &str, b: &str) -> Ordering {
+    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let number = |chars: &mut std::iter::Peekable<std::str::Chars>| {
+                    let mut digits = String::new();
+                    while let Some(digit) = chars.next_if(char::is_ascii_digit) {
+                        digits.push(digit);
+                    }
+                    digits
+                };
+                let (x, y) = (number(&mut a), number(&mut b));
+                let (x, y) = (x.trim_start_matches('0'), y.trim_start_matches('0'));
+                let order = x.len().cmp(&y.len()).then_with(|| x.cmp(y));
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            (Some(x), Some(y)) => {
+                let order = x.to_lowercase().cmp(y.to_lowercase());
+                if order != Ordering::Equal {
+                    return order;
+                }
+                a.next();
+                b.next();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_in_reading_order() {
+        let mut names = vec!["Folder 10", "folder 2", "Folder 1", "02 b", "1 a"];
+        names.sort_by(|a, b| natural_order(a, b));
+        assert_eq!(names, ["1 a", "02 b", "Folder 1", "folder 2", "Folder 10"]);
+    }
 
     /// A folder of its own for a test, empty.
     fn scratch(name: &str) -> PathBuf {
