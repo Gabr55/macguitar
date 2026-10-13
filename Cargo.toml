@@ -1,6 +1,6 @@
 [package]
 name = "macguitar"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 # based on ruxguitar by Arnaud Gourlay, https://github.com/agourlay/ruxguitar
 authors = [
